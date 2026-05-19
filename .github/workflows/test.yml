@@ -1,0 +1,54 @@
+name: Test and build
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+  # Weekly run catches breakage from new convex-mcp-gateway releases
+  # even if Dependabot doesn't open a PR (e.g. when the latest semver
+  # range already covers the new version).
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  check:
+    name: Install + codegen + typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.3
+
+      - name: Node setup
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install
+        # Use --no-frozen-lockfile so the scheduled run picks up newer
+        # convex-mcp-gateway versions within the declared semver range
+        # (the whole point of the cron job). For push/PR this is fine
+        # too — the lockfile is committed and only updates if the
+        # registry actually has a newer compatible version.
+        run: pnpm install --no-frozen-lockfile
+
+      # No codegen step: `convex/_generated/` is committed so we don't
+      # need a Convex deployment in CI. When schemas or function shapes
+      # change, regenerate locally with `pnpm convex codegen` (after
+      # `pnpm local:start`) and commit the diff.
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        run: pnpm build

@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # npm: get a PR when convex-mcp-gateway publishes a new version so
+  # the demo stays in lockstep. CI on the PR exercises the install +
+  # codegen + typecheck path, surfacing breaking changes immediately.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      convex:
+        patterns:
+          - "convex"
+          - "convex-mcp-gateway"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      dev:
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
