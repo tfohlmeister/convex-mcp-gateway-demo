@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "convex": "^1.38.0",
-    "convex-mcp-gateway": "^0.1.2",
+    "convex-mcp-gateway": "^0.4.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

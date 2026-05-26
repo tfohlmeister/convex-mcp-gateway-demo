@@ -12,8 +12,8 @@ importers:
         specifier: ^1.38.0
         version: 1.39.1(react@19.2.6)
       convex-mcp-gateway:
-        specifier: ^0.1.2
-        version: 0.1.2(convex@1.39.1(react@19.2.6))
+        specifier: ^0.4.0
+        version: 0.4.0(convex@1.39.1(react@19.2.6))
       react:
         specifier: ^19.2.6
         version: 19.2.6
@@ -335,8 +335,8 @@ packages:
       babel-plugin-react-compiler:
         optional: true
 
-  convex-mcp-gateway@0.1.2:
-    resolution: {integrity: sha512-/5jtqz9MWFpGqdsw4kK1HtGQ0ZwbF2YrEHn9wlGeGWkROamiD9ZOOWONsl7JwGEu1CYJOw6huoeo0ueiOOS7zw==}
+  convex-mcp-gateway@0.4.0:
+    resolution: {integrity: sha512-0mQvwqzK6pkkKMAMh3MhIJk9/5wC/qLwXg8TZqqzyFV0WNToZJpIROyXSAjC2GI2gD4aXB5xKuUBX7IrMugzow==}
     peerDependencies:
       convex: ^1.35.0
 
@@ -742,7 +742,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.0.13(esbuild@0.27.0)
 
-  convex-mcp-gateway@0.1.2(convex@1.39.1(react@19.2.6)):
+  convex-mcp-gateway@0.4.0(convex@1.39.1(react@19.2.6)):
     dependencies:
       convex: 1.39.1(react@19.2.6)
 
