@@ -52,3 +52,15 @@ jobs:
 
       - name: Build
         run: pnpm build
+        env:
+          # `src/main.tsx` throws at module load when this is unset, and
+          # the bundler then drops the entire app as dead code behind
+          # that throw. The build still exits 0, so without a value here
+          # this step proves nothing about the app. Any syntactically
+          # valid URL does: nothing connects at build time.
+          VITE_CONVEX_URL: http://127.0.0.1:3310
+
+      - name: Assert the app actually got bundled
+        run: |
+          grep -q "convex-mcp-gateway playground" dist/assets/*.js \
+            || { echo "::error::app code missing from bundle"; exit 1; }

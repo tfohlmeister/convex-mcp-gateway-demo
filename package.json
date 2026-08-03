@@ -11,13 +11,15 @@
     "convex:codegen": "convex codegen",
     "convex:dev": "convex dev --once --typecheck-components",
     "convex:run": "convex run",
+    "convex:env": "convex env",
+    "local:devtoken": "convex env set MCP_DEV_BEARER_TOKEN local-dev-token",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "convex": "^1.38.0",
-    "convex-mcp-gateway": "^0.1.2",
+    "convex": "^1.43.0",
+    "convex-mcp-gateway": "^0.6.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

@@ -8,6 +8,7 @@ type Note = {
   _creationTime: number;
   title: string;
   body: string;
+  author?: string;
 };
 
 export function NotesPanel() {
@@ -112,6 +113,12 @@ function NoteRow({
       <div className="row-actions">
         <span className="muted small">
           {new Date(note._creationTime).toLocaleString()}
+        </span>
+        {/* Set by the gateway from the injected MCP caller identity.
+            Absent for notes created here in the UI, which talks to
+            Convex directly and carries no MCP identity. */}
+        <span className="muted small">
+          by {note.author ?? "UI (no MCP identity)"}
         </span>
         <div className="spacer" />
         <button onClick={onSave} disabled={!dirty || saving}>

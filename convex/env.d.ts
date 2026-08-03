@@ -9,5 +9,6 @@ declare const process: {
     OIDC_USERINFO_PATH?: string;
     MCP_AUTH_SERVER_URL?: string;
     MCP_RESOURCE_URL?: string;
+    MCP_DEV_BEARER_TOKEN?: string;
   };
 };
