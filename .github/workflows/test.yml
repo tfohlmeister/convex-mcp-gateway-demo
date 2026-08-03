@@ -16,7 +16,7 @@ on:
 
 jobs:
   check:
-    name: Install + codegen + typecheck + build
+    name: Typecheck, test and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
