@@ -18,7 +18,10 @@ export function AuditPanel() {
       {entries.map((e) => (
         <li key={e._id} className={`card audit-row outcome-${e.outcome}`}>
           <header className="audit-head">
-            <span className="tool">{e.toolName}</span>
+            {/* One log carries two row shapes: tool calls set
+                toolName/toolKind, resource operations set
+                resourceUri/resourceOperation. */}
+            <span className="tool">{e.resourceUri ?? e.toolName}</span>
             <span className={`badge badge-${e.outcome}`}>{e.outcome}</span>
             <span className="muted small">{e.durationMs}ms</span>
             <span className="muted small">
@@ -29,7 +32,11 @@ export function AuditPanel() {
             <span className="muted small">
               identity: {e.identitySubject ?? "anonymous"}
             </span>
-            <span className="muted small">kind: {e.toolKind}</span>
+            <span className="muted small">
+              {e.resourceOperation !== undefined
+                ? `resource: ${e.resourceOperation}`
+                : `kind: ${e.toolKind}`}
+            </span>
           </div>
           {e.args !== null && e.args !== undefined && (
             <pre className="args">{JSON.stringify(e.args, null, 2)}</pre>

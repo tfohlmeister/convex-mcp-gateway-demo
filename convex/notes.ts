@@ -1,23 +1,49 @@
+import { mcpCallerValidator } from "convex-mcp-gateway";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server.js";
 
+const noteValidator = v.object({
+  _id: v.id("notes"),
+  _creationTime: v.number(),
+  title: v.string(),
+  body: v.string(),
+  author: v.optional(v.string()),
+});
+
 export const list = query({
   args: {},
-  returns: v.array(
-    v.object({
-      _id: v.id("notes"),
-      _creationTime: v.number(),
-      title: v.string(),
-      body: v.string(),
-    }),
-  ),
+  returns: v.array(noteValidator),
   handler: async (ctx) => await ctx.db.query("notes").collect(),
 });
 
+export const get = query({
+  args: { id: v.string() },
+  returns: v.union(noteValidator, v.null()),
+  handler: async (ctx, args) => {
+    // The id arrives as a raw string from an expanded resource template
+    // URI (`note://<id>`), so it has to be normalized before use. A
+    // malformed id is a miss, not a crash.
+    const id = ctx.db.normalizeId("notes", args.id);
+    return id === null ? null : await ctx.db.get(id);
+  },
+});
+
 export const create = mutation({
-  args: { title: v.string(), body: v.string() },
+  args: {
+    title: v.string(),
+    body: v.string(),
+    // Filled server-side by the gateway when called as the `notes_create`
+    // MCP tool (see `identityArg` in convex/mcp.ts). Optional so the
+    // React UI can call this mutation directly with no MCP identity.
+    caller: v.optional(mcpCallerValidator),
+  },
   returns: v.id("notes"),
-  handler: async (ctx, args) => await ctx.db.insert("notes", args),
+  handler: async (ctx, args) =>
+    await ctx.db.insert("notes", {
+      title: args.title,
+      body: args.body,
+      ...(args.caller !== undefined ? { author: args.caller.subject } : {}),
+    }),
 });
 
 export const update = mutation({
@@ -49,9 +75,22 @@ export const count = query({
   },
 });
 
+/**
+ * Report the authenticated MCP caller back to the client.
+ *
+ * `ctx.auth` is deliberately NOT used here: a dispatched tool runs inside
+ * the gateway component, where Convex does not propagate the host's auth
+ * context, so `ctx.auth.getUserIdentity()` would always return null. The
+ * caller arrives as an ordinary argument that the gateway fills at the
+ * request boundary and strips from the advertised input schema.
+ */
 export const whoami = query({
-  args: {},
-  handler: async (ctx) => {
-    return await ctx.auth.getUserIdentity();
-  },
+  args: { caller: mcpCallerValidator },
+  returns: v.object({ subject: v.string(), claims: v.array(v.string()) }),
+  handler: async (_ctx, args) => ({
+    subject: args.caller.subject,
+    // Claim *names* only. The values can carry email, groups and other
+    // personal data, and this response goes straight to an LLM.
+    claims: Object.keys(args.caller.claims ?? {}).sort(),
+  }),
 });

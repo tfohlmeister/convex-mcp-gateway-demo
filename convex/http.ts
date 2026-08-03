@@ -3,10 +3,12 @@ import {
   McpGateway,
   type McpAuthorizerHandler,
   type McpIdentityResolver,
+  type McpResourceAuthorizerHandler,
 } from "convex-mcp-gateway";
 import { httpRouter } from "convex/server";
 import { components } from "./_generated/api.js";
 import { httpAction } from "./_generated/server.js";
+import { instructions, resources, resourceTemplates, tools } from "./mcp.js";
 
 const gateway = new McpGateway(components.mcpGateway);
 
@@ -26,12 +28,46 @@ const OIDC_USERINFO_PATH =
   process.env.OIDC_USERINFO_PATH ?? "/api/oidc/userinfo";
 
 /**
+ * DEMO ONLY. A single hard-coded Bearer token, off unless
+ * MCP_DEV_BEARER_TOKEN is explicitly set.
+ *
+ * Without it the local flow in the README cannot reach a single
+ * auth-gated tool or any resource: no IdP runs next to
+ * `pnpm local:start`, so `resolveIdentity` below returns null for every
+ * token and everything except `notes_count` answers 401. This makes
+ * `identityArg`, the role checks, and the resource reads explorable on
+ * a laptop.
+ *
+ * Never set this on a deployment reachable from the internet. It grants
+ * the `admin` group to anyone who knows the string.
+ */
+const DEV_BEARER_TOKEN = process.env.MCP_DEV_BEARER_TOKEN ?? "";
+
+/**
  * Validate Bearer tokens by hitting the IdP's userinfo endpoint. The
  * IdP issues opaque access tokens which Convex's local JWT validation
  * can't verify; userinfo asks the IdP "is this token still valid, and
  * who does it belong to?".
  */
 const resolveIdentity: McpIdentityResolver = async (token) => {
+  // Compared before the IdP call so the dev token works with no issuer
+  // configured. The `&&` matters: an unset env var must never match an
+  // empty or absent token.
+  if (DEV_BEARER_TOKEN) {
+    if (token === DEV_BEARER_TOKEN) {
+      return {
+        subject: "dev-user",
+        claims: { sub: "dev-user", groups: ["admin"] },
+      };
+    }
+    // A second identity with no groups, so the denial paths are
+    // reachable locally too: the write tools answer -32003 Forbidden and
+    // `note://{id}` refuses the read, while `notes_list` and
+    // `notes://all` still work.
+    if (token === `${DEV_BEARER_TOKEN}-readonly`) {
+      return { subject: "dev-reader", claims: { sub: "dev-reader" } };
+    }
+  }
   if (!OIDC_ISSUER) return null;
   const r = await fetch(`${OIDC_ISSUER}${OIDC_USERINFO_PATH}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -64,6 +100,30 @@ const authorize: McpAuthorizerHandler = async (_ctx, args) => {
   return { allowed: true };
 };
 
+/**
+ * The resource counterpart of `authorize`. The gateway rejects
+ * anonymous callers before this runs, so `args.identity` is non-null.
+ *
+ * Policy, mirroring the tool side:
+ * - listing resources and templates: any authenticated caller
+ * - reading `notes://all`: any authenticated caller
+ * - reading a single `note://{id}`: `admin` group, same bar as the
+ *   write tools
+ *
+ * List-visibility and read-access are separate decisions: a template
+ * read is authorized here on the expanded concrete URI under
+ * `resource_read`, not under `resource_templates_list`.
+ */
+const authorizeResource: McpResourceAuthorizerHandler = async (_ctx, args) => {
+  if (args.mode !== "resource_read") return { allowed: true };
+  if (args.resourceUri === "notes://all") return { allowed: true };
+
+  const claims = (args.identity.claims ?? {}) as { groups?: unknown };
+  const groups = Array.isArray(claims.groups) ? claims.groups : [];
+  if (groups.includes("admin")) return { allowed: true };
+  return { allowed: false, reason: "Forbidden: needs group admin" };
+};
+
 const http = httpRouter();
 
 const mcpHandler = httpAction(async (ctx, request) =>
@@ -71,6 +131,20 @@ const mcpHandler = httpAction(async (ctx, request) =>
     authorize,
     cors: true,
     resolveIdentity,
+    // Declarative catalog: the registry is reconciled from this list on
+    // each initialize, so no registerDefaults mutation is needed.
+    tools,
+    // Read-only content alongside the tools: one concrete resource and
+    // one RFC 6570 template.
+    resources,
+    resourceTemplates,
+    authorizeResource,
+    // Records URI, operation, identity and outcome for reads. Never the
+    // resource contents.
+    auditResources: { read: true },
+    // Server-level guidance surfaced in the initialize result, so the
+    // model learns the auth model without reading every description.
+    initializeInstructions: instructions,
   } satisfies HandleMcpRequestOptions),
 );
 // Mount both /mcp/ and /mcp — claude.ai strips the trailing slash

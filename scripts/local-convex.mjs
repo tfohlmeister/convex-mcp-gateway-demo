@@ -88,7 +88,16 @@ function writeEnvFile() {
   // itself emits, so use that.
   const contents =
     `CONVEX_SELF_HOSTED_URL=http://127.0.0.1:${PORT}\n` +
-    `CONVEX_SELF_HOSTED_ADMIN_KEY=${INSTANCE_NAME}|${ADMIN_KEY}\n`;
+    `CONVEX_SELF_HOSTED_ADMIN_KEY=${INSTANCE_NAME}|${ADMIN_KEY}\n` +
+    // The Vite app reads this one. Without it `pnpm dev` throws at
+    // module load ("VITE_CONVEX_URL is not set") and the UI never
+    // renders, so the local flow needs it written here too.
+    `VITE_CONVEX_URL=http://127.0.0.1:${PORT}\n` +
+    // HTTP actions (and therefore /mcp) live on the site port, not the
+    // backend port. Cloud deployments derive it by swapping
+    // .convex.cloud for .convex.site, which is a no-op locally, so the
+    // UI needs it spelled out.
+    `VITE_CONVEX_SITE_URL=http://127.0.0.1:${SITE_PORT}\n`;
   if (existsSync(ENV_FILE) && readFileSync(ENV_FILE, "utf-8") === contents) {
     return;
   }

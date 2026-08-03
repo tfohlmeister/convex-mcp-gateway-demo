@@ -3,7 +3,13 @@ import { AuditPanel } from "./components/AuditPanel";
 
 export function App() {
   const url = import.meta.env.VITE_CONVEX_URL as string;
-  const siteUrl = url.replace(".convex.cloud", ".convex.site");
+  // Cloud deployments serve HTTP actions from the .convex.site twin of
+  // the deployment URL. A local backend uses a separate port instead,
+  // where that swap does nothing, so honour an explicit override first
+  // (`pnpm local:start` writes it into .env.local).
+  const siteUrl =
+    (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined) ??
+    url.replace(".convex.cloud", ".convex.site");
 
   return (
     <div className="app">

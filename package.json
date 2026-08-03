@@ -11,6 +11,8 @@
     "convex:codegen": "convex codegen",
     "convex:dev": "convex dev --once --typecheck-components",
     "convex:run": "convex run",
+    "convex:env": "convex env",
+    "local:devtoken": "convex env set MCP_DEV_BEARER_TOKEN local-dev-token",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
