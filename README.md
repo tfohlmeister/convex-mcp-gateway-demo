@@ -44,7 +44,7 @@ Walk `convex/` and `src/`. Nothing more to set up.
 ```sh
 pnpm install
 pnpm local:start          # downloads pinned convex-local-backend binary
-                          # writes .env.local, runs on :3210 / :3211
+                          # writes .env.local, runs on :3310 / :3311
 pnpm convex:dev           # codegen + push functions to local backend
 pnpm convex:run mcp:registerDefaults
 pnpm dev                  # http://localhost:5173 — UI runs against local
@@ -57,7 +57,7 @@ Drive the MCP endpoint directly with the official Inspector:
 
 ```sh
 npx -y @modelcontextprotocol/inspector --cli \
-  http://127.0.0.1:3211/mcp/ --transport http --method tools/list
+  http://127.0.0.1:3311/mcp/ --transport http --method tools/list
 ```
 
 This lists the public tools only (no Bearer = anonymous). The

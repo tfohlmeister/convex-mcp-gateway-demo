@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       convex:
-        specifier: ^1.38.0
-        version: 1.39.1(react@19.2.6)
+        specifier: ^1.43.0
+        version: 1.43.0(react@19.2.6)
       convex-mcp-gateway:
-        specifier: ^0.1.2
-        version: 0.1.2(convex@1.39.1(react@19.2.6))
+        specifier: ^0.6.1
+        version: 0.6.1(convex@1.43.0(react@19.2.6))
       react:
         specifier: ^19.2.6
         version: 19.2.6
@@ -335,13 +335,13 @@ packages:
       babel-plugin-react-compiler:
         optional: true
 
-  convex-mcp-gateway@0.1.2:
-    resolution: {integrity: sha512-/5jtqz9MWFpGqdsw4kK1HtGQ0ZwbF2YrEHn9wlGeGWkROamiD9ZOOWONsl7JwGEu1CYJOw6huoeo0ueiOOS7zw==}
+  convex-mcp-gateway@0.6.1:
+    resolution: {integrity: sha512-ZLKD/CDZKPHscvsi8aTAxlqBxOrOX5j9Bcnj+3s8ROejywWAPvTWK+RcxfhCo7L9cYAXupQolnbe8IuC87/LMA==}
     peerDependencies:
       convex: ^1.35.0
 
-  convex@1.39.1:
-    resolution: {integrity: sha512-W+gVXA7BpRF1xLlS1kGTtKVaqd5yonqbGESKiPtIUXjV744GdDz8IG7RVsSY5KzHbgxuJBHKaJYk+92OIHTskQ==}
+  convex@1.43.0:
+    resolution: {integrity: sha512-huZWEUZQYxIRG104o22ZI99HkviSEVltwezZRDi+pQDPrQbc5EoCPa4Y7pJDqUBQw9dc/iEEXj2/rLZg1j7Dww==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -556,8 +556,8 @@ packages:
       yaml:
         optional: true
 
-  ws@8.18.0:
-    resolution: {integrity: sha512-8VbfWfHLbbwu3+N6OKsOMpBdT4kXPDDB9cJk2bJ6mh9ucxdlnNvH1e+roYkKmN9Nxw2yjz7VzeO9oOz2zJ04Pw==}
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -742,15 +742,15 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.0.13(esbuild@0.27.0)
 
-  convex-mcp-gateway@0.1.2(convex@1.39.1(react@19.2.6)):
+  convex-mcp-gateway@0.6.1(convex@1.43.0(react@19.2.6)):
     dependencies:
-      convex: 1.39.1(react@19.2.6)
+      convex: 1.43.0(react@19.2.6)
 
-  convex@1.39.1(react@19.2.6):
+  convex@1.43.0(react@19.2.6):
     dependencies:
       esbuild: 0.27.0
       prettier: 3.8.3
-      ws: 8.18.0
+      ws: 8.21.0
     optionalDependencies:
       react: 19.2.6
     transitivePeerDependencies:
@@ -913,4 +913,4 @@ snapshots:
       esbuild: 0.27.0
       fsevents: 2.3.3
 
-  ws@8.18.0: {}
+  ws@8.21.0: {}

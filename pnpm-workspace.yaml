@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - convex-mcp-gateway@0.1.2
+  - convex-mcp-gateway@0.6.1
