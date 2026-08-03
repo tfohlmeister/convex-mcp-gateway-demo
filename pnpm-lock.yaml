@@ -10,32 +10,32 @@ importers:
     dependencies:
       convex:
         specifier: ^1.43.0
-        version: 1.43.0(react@19.2.6)
+        version: 1.43.0(react@19.2.8)
       convex-mcp-gateway:
         specifier: ^0.6.1
-        version: 0.6.1(convex@1.43.0(react@19.2.6))
+        version: 0.6.1(convex@1.43.0(react@19.2.8))
       react:
-        specifier: ^19.2.6
-        version: 19.2.6
+        specifier: ^19.2.7
+        version: 19.2.8
       react-dom:
-        specifier: ^19.2.6
-        version: 19.2.6(react@19.2.6)
+        specifier: ^19.2.7
+        version: 19.2.8(react@19.2.8)
     devDependencies:
       '@edge-runtime/vm':
         specifier: 5.0.0
         version: 5.0.0
       '@types/react':
-        specifier: ^19.2.14
-        version: 19.2.14
+        specifier: ^19.2.17
+        version: 19.2.18
       '@types/react-dom':
         specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.14)
+        version: 19.2.3(@types/react@19.2.18)
       '@vitejs/plugin-react':
         specifier: ^6.0.5
         version: 6.0.5(vite@8.2.0(esbuild@0.27.0))
       convex-test:
         specifier: ^0.0.41
-        version: 0.0.41(convex@1.43.0(react@19.2.6))
+        version: 0.0.41(convex@1.43.0(react@19.2.8))
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
@@ -351,8 +351,8 @@ packages:
     peerDependencies:
       '@types/react': ^19.2.0
 
-  '@types/react@19.2.14':
-    resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+  '@types/react@19.2.18':
+    resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -697,13 +697,13 @@ packages:
     engines: {node: '>=14'}
     hasBin: true
 
-  react-dom@19.2.6:
-    resolution: {integrity: sha512-0prMI+hvBbPjsWnxDLxlCGyM8PN6UuWjEUCYmZhO67xIV9Xasa/r/vDnq+Xyq4Lo27g8QSbO5YzARu0D1Sps3g==}
+  react-dom@19.2.8:
+    resolution: {integrity: sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ==}
     peerDependencies:
-      react: ^19.2.6
+      react: ^19.2.8
 
-  react@19.2.6:
-    resolution: {integrity: sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q==}
+  react@19.2.8:
+    resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
     engines: {node: '>=0.10.0'}
 
   rolldown@1.2.1:
@@ -1031,11 +1031,11 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/react-dom@19.2.3(@types/react@19.2.14)':
+  '@types/react-dom@19.2.3(@types/react@19.2.18)':
     dependencies:
-      '@types/react': 19.2.14
+      '@types/react': 19.2.18
 
-  '@types/react@19.2.14':
+  '@types/react@19.2.18':
     dependencies:
       csstype: 3.2.3
 
@@ -1151,21 +1151,21 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-mcp-gateway@0.6.1(convex@1.43.0(react@19.2.6)):
+  convex-mcp-gateway@0.6.1(convex@1.43.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.6)
+      convex: 1.43.0(react@19.2.8)
 
-  convex-test@0.0.41(convex@1.43.0(react@19.2.6)):
+  convex-test@0.0.41(convex@1.43.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.6)
+      convex: 1.43.0(react@19.2.8)
 
-  convex@1.43.0(react@19.2.6):
+  convex@1.43.0(react@19.2.8):
     dependencies:
       esbuild: 0.27.0
       prettier: 3.8.3
       ws: 8.21.0
     optionalDependencies:
-      react: 19.2.6
+      react: 19.2.8
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -1289,12 +1289,12 @@ snapshots:
 
   prettier@3.8.3: {}
 
-  react-dom@19.2.6(react@19.2.6):
+  react-dom@19.2.8(react@19.2.8):
     dependencies:
-      react: 19.2.6
+      react: 19.2.8
       scheduler: 0.27.0
 
-  react@19.2.6: {}
+  react@19.2.8: {}
 
   rolldown@1.2.1:
     dependencies:
