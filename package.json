@@ -13,6 +13,7 @@
     "convex:run": "convex run",
     "convex:env": "convex env",
     "local:devtoken": "convex env set MCP_DEV_BEARER_TOKEN local-dev-token",
+    "test": "vitest run",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
@@ -24,10 +25,13 @@
     "react-dom": "^19.2.6"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "5.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.5",
+    "convex-test": "^0.0.41",
     "typescript": "~7.0.2",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "vitest": "^4.0.18"
   }
 }
