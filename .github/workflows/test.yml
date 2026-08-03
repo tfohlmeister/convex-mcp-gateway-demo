@@ -38,7 +38,7 @@ jobs:
         # Use --no-frozen-lockfile so the scheduled run picks up newer
         # convex-mcp-gateway versions within the declared semver range
         # (the whole point of the cron job). For push/PR this is fine
-        # too — the lockfile is committed and only updates if the
+        # too: the lockfile is committed and only updates if the
         # registry actually has a newer compatible version.
         run: pnpm install --no-frozen-lockfile
 
@@ -49,6 +49,12 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
+
+      # Drives the mounted /mcp/ route against an in-memory deployment,
+      # so a convex-mcp-gateway release that changes the wire format or
+      # the authorization contract fails here rather than in a demo.
+      - name: Test
+        run: pnpm test
 
       - name: Build
         run: pnpm build
