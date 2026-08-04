@@ -34,8 +34,8 @@ importers:
         specifier: ^6.0.5
         version: 6.0.5(vite@8.2.0(esbuild@0.27.0))
       convex-test:
-        specifier: ^0.0.41
-        version: 0.0.41(convex@1.43.0(react@19.2.8))
+        specifier: ^0.0.54
+        version: 0.0.54(convex@1.43.0(react@19.2.8))
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
@@ -532,10 +532,10 @@ packages:
     peerDependencies:
       convex: ^1.35.0
 
-  convex-test@0.0.41:
-    resolution: {integrity: sha512-GPHeYFOi70n7UtW0eCEQFVhzl/+m8PvbWkDCbKpHLybI1MrScf4sVpGeM0cC2qmtxiduxa2nLPbehPalhh9oyQ==}
+  convex-test@0.0.54:
+    resolution: {integrity: sha512-C0v2SQcuxrELAJRNzE6fQ686XDPor7UFoC22jcoJXeCRqhLo8ZIMZ4jyUHoo1UdAL2enCb0AbiprCVpLDN8u9Q==}
     peerDependencies:
-      convex: ^1.16.4
+      convex: ^1.32.0
 
   convex@1.43.0:
     resolution: {integrity: sha512-huZWEUZQYxIRG104o22ZI99HkviSEVltwezZRDi+pQDPrQbc5EoCPa4Y7pJDqUBQw9dc/iEEXj2/rLZg1j7Dww==}
@@ -1155,7 +1155,7 @@ snapshots:
     dependencies:
       convex: 1.43.0(react@19.2.8)
 
-  convex-test@0.0.41(convex@1.43.0(react@19.2.8)):
+  convex-test@0.0.54(convex@1.43.0(react@19.2.8)):
     dependencies:
       convex: 1.43.0(react@19.2.8)
 
