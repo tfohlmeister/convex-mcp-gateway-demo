@@ -255,7 +255,7 @@ describe("initialize", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
     });
     const body = (await listed.json()) as { result: { tools: ToolEntry[] } };
-    expect(body.result.tools).toHaveLength(6);
+    expect(body.result.tools).toHaveLength(7);
   });
 
   test("returns the instructions declared in convex/mcp.ts", async () => {
@@ -300,6 +300,7 @@ describe("tools/list per identity", () => {
   test("dev-reader sees the read tools but no writes", async () => {
     const t = newTest();
     expect(await toolNames(t, READER)).toEqual([
+      "notes_by_author",
       "notes_count",
       "notes_list",
       "notes_whoami",
@@ -309,6 +310,7 @@ describe("tools/list per identity", () => {
   test("dev-user (admin) sees the whole catalog", async () => {
     const t = newTest();
     expect(await toolNames(t, ADMIN)).toEqual([
+      "notes_by_author",
       "notes_count",
       "notes_create",
       "notes_delete",
@@ -901,5 +903,269 @@ describe("audit log", () => {
 
     const rows = await t.query(api.mcp.recentAudit, {});
     expect(rows.map((row) => row.toolName)).toContain("notes_count");
+  });
+});
+
+// ---------------------------------------------------------------
+// MCP 2026-07-28: stateless requests, and the routing headers that
+// `notes_by_author` declares via `x-mcp-header`.
+// ---------------------------------------------------------------
+
+const MODERN_META = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
+
+/** One stateless request. No initialize, no session id, no state. */
+async function modern(
+  t: Harness,
+  method: string,
+  params: Record<string, unknown> = {},
+  headers: AuthHeaders = ANON,
+): Promise<Response> {
+  const name = typeof params.name === "string" ? params.name : undefined;
+  return await t.fetch("/mcp/", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method,
+      ...(name !== undefined ? { "mcp-name": name } : {}),
+      ...headers,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: { ...params, _meta: MODERN_META },
+    }),
+  });
+}
+
+/** A `notes_by_author` call, with whatever routing headers are passed. */
+async function byAuthor(
+  t: Harness,
+  routing: AuthHeaders,
+  args: { author: string; limit: number } = { author: "dev-user", limit: 25 },
+) {
+  return await modern(
+    t,
+    "tools/call",
+    { name: "notes_by_author", arguments: args },
+    { ...ADMIN, ...routing },
+  );
+}
+
+describe("stateless 2026-07-28 requests", () => {
+  test("server/discover answers without an initialize or a session", async () => {
+    const t = newTest();
+    const res = await modern(t, "server/discover");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+    const body = (await res.json()) as Envelope<{
+      supportedVersions: string[];
+      instructions?: string;
+      resultType?: string;
+      cacheScope?: string;
+    }>;
+    expect(body.result?.supportedVersions).toContain("2026-07-28");
+    expect(body.result?.resultType).toBe("complete");
+    // Identity-filtered catalogs must never be shared between callers.
+    expect(body.result?.cacheScope).toBe("private");
+    // The same `instructions` the legacy initialize returns.
+    expect(body.result?.instructions).toBe(instructions);
+  });
+
+  test("tools/list works with no session and still filters by identity", async () => {
+    const t = newTest();
+    const anonRes = await modern(t, "tools/list");
+    const adminRes = await modern(t, "tools/list", {}, ADMIN);
+
+    const names = async (res: Response) =>
+      ((await res.json()) as Envelope<{ tools: { name: string }[] }>).result!.tools.map(
+        (tool) => tool.name,
+      );
+    expect(await names(anonRes)).toEqual(["notes_count"]);
+    expect(await names(adminRes)).toContain("notes_by_author");
+  });
+});
+
+describe("x-mcp-header routing on notes_by_author", () => {
+  test("the annotation reaches the client in tools/list", async () => {
+    const t = newTest();
+    const res = await modern(t, "tools/list", {}, ADMIN);
+    const body = (await res.json()) as Envelope<{
+      tools: { name: string; inputSchema: Record<string, any> }[]
+    }>;
+    const tool = body.result!.tools.find((x) => x.name === "notes_by_author");
+
+    expect(tool!.inputSchema.properties.author["x-mcp-header"]).toBe("Author");
+    expect(tool!.inputSchema.properties.limit["x-mcp-header"]).toBe("Limit");
+  });
+
+  /**
+   * Assert a call actually ran. A failed dispatch comes back as HTTP 200
+   * with `result.isError: true` and no top-level `error`, so asserting
+   * only on the status would stay green if the query itself blew up.
+   */
+  async function expectNotes(res: Response, titles: string[]) {
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Envelope<{
+      isError: boolean;
+      content: { type: string; text: string }[];
+    }>;
+    expect(body.error).toBeUndefined();
+    expect(body.result?.isError).toBe(false);
+    const notes = JSON.parse(body.result!.content[0].text) as {
+      title: string;
+    }[];
+    expect(notes.map((note) => note.title)).toEqual(titles);
+  }
+
+  /** One note authored by dev-user, written through the gateway. */
+  async function seedNote(t: Harness, title: string) {
+    const res = await modern(
+      t,
+      "tools/call",
+      { name: "notes_create", arguments: { title, body: "b" } },
+      ADMIN,
+    );
+    expect(res.status).toBe(200);
+  }
+
+  test("matching headers are accepted and the query returns its rows", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    // Also covers the by_author index and the identityArg stamping that
+    // puts `dev-user` on the note in the first place.
+    await expectNotes(
+      await byAuthor(t, {
+        "mcp-param-author": "dev-user",
+        "mcp-param-limit": "25",
+      }),
+      ["first"],
+    );
+  });
+
+  test("an unrelated author gets no rows", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    await expectNotes(
+      await byAuthor(
+        t,
+        { "mcp-param-author": "dev-reader", "mcp-param-limit": "25" },
+        { author: "dev-reader", limit: 25 },
+      ),
+      [],
+    );
+  });
+
+  test("an integer header is compared numerically, not as a string", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    await expectNotes(
+      await byAuthor(t, {
+        "mcp-param-author": "dev-user",
+        "mcp-param-limit": "25.0",
+      }),
+      ["first"],
+    );
+  });
+
+  test("a base64 sentinel value is decoded before comparison", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    await expectNotes(
+      await byAuthor(t, {
+        "mcp-param-author": `=?base64?${btoa("dev-user")}?=`,
+        "mcp-param-limit": "25",
+      }),
+      ["first"],
+    );
+  });
+
+  test("a legacy caller reaches the tool with no routing headers at all", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    // Documents the boundary rather than approving of it: header
+    // validation is scoped to the modern protocol, so an intermediary
+    // enforcing policy on Mcp-Param-* must reject legacy requests
+    // itself. Both convex/mcp.ts and the README say so.
+    const body = await once<{ isError: boolean }>(t, ADMIN, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "notes_by_author",
+        arguments: { author: "dev-user", limit: 25 },
+      },
+    });
+    expect(body.result?.isError).toBe(false);
+  });
+
+  test("a non-integer limit from a legacy caller does not blow up", async () => {
+    const t = newTest();
+    await seedNote(t, "first");
+
+    // `type: "integer"` is only enforced against the mirrored header, so
+    // the query has to floor the value itself. Without that, `.take()`
+    // rejects 25.5 and the caller gets an opaque execution error.
+    const body = await once<{ isError: boolean }>(t, ADMIN, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "notes_by_author",
+        arguments: { author: "dev-user", limit: 25.5 },
+      },
+    });
+    expect(body.result?.isError).toBe(false);
+  });
+
+  test.each([
+    ["a header disagreeing with the body", {
+      "mcp-param-author": "someone-else",
+      "mcp-param-limit": "25",
+    }],
+    ["an integer header disagreeing with the body", {
+      "mcp-param-author": "dev-user",
+      "mcp-param-limit": "26",
+    }],
+    ["a hex value that Number() would coerce to a match", {
+      "mcp-param-author": "dev-user",
+      "mcp-param-limit": "0x19",
+    }],
+    ["a missing declared header", { "mcp-param-limit": "25" }],
+    ["no routing headers at all", {}],
+  ])("rejects %s with -32020", async (_label, routing) => {
+    const t = newTest();
+    const res = await byAuthor(t, routing);
+
+    // A proxy routing on the header and Convex executing on the body must
+    // never be able to disagree, so this fails before dispatch.
+    expect(res.status).toBe(400);
+    expect((await res.json()) as Envelope<unknown>).toMatchObject({
+      error: { code: -32020 },
+    });
+  });
+});
+
+describe("origin validation is off by default", () => {
+  test("an Origin header is not rejected when MCP_ALLOWED_ORIGINS is unset", async () => {
+    const t = newTest();
+    // The shipped default. convex/origin.test.ts covers the opposite,
+    // in its own file so this one keeps testing the default.
+    const res = await modern(t, "tools/list", {}, {
+      origin: "https://anything.example",
+    });
+
+    expect(res.status).toBe(200);
   });
 });

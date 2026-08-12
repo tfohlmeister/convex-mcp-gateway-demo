@@ -9,10 +9,11 @@ a Convex-backed notes table is exposed as MCP tools, gated by an
 
 ### Tools
 
-Six MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
+Seven MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
 to `handleMcpRequest({ tools })`. The gateway reconciles the registry on
-every `initialize`, so editing the array takes effect on the next client
-connect. **There is no registration step to run by hand.**
+every `initialize` and before every stateless 2026-07-28 request, so
+editing the array takes effect on the next client connect. **There is no
+registration step to run by hand.**
 
 | Tool           | Kind     | Visibility    | What it shows                                  |
 | -------------- | -------- | ------------- | ---------------------------------------------- |
@@ -22,6 +23,15 @@ connect. **There is no registration step to run by hand.**
 | `notes_create` | mutation | role `admin`  | role check, `auditArgs: false`, and `identityArg` stamping the note's author |
 | `notes_update` | mutation | role `admin`  | nested-path arg redaction (`redact: ["body"]`) |
 | `notes_delete` | mutation | role `admin`  | mutation through the authorizer                |
+| `notes_by_author` | query | auth required | `x-mcp-header`: two arguments mirrored into `Mcp-Param-*` routing headers (see below) |
+
+`notes_by_author` takes the subject as an ordinary argument, so any
+authenticated caller can ask about any author. That exposes nothing extra
+here, because `notes_list` already hands the same callers the whole
+table, but do not copy the shape into a deployment where it would: drop
+the argument and declare `identityArg`, so the gateway fills the subject
+server-side. The two features do not combine, and the reason is in the
+comment above the registration in `convex/mcp.ts`.
 
 ### Resources
 
@@ -79,7 +89,7 @@ pnpm local:start          # downloads pinned convex-local-backend binary
                           # writes .env.local, runs on :3310 / :3311
 pnpm convex:dev           # codegen + push functions to local backend
 pnpm local:devtoken       # optional, see "Trying the auth-gated parts"
-pnpm dev                  # http://localhost:5173 — UI runs against local
+pnpm dev                  # http://localhost:5173, UI runs against local
 ```
 
 `pnpm local:start` keeps running; open a second terminal for the
@@ -97,7 +107,7 @@ npx -y @modelcontextprotocol/inspector --cli \
 
 This lists the public tools only (no Bearer = anonymous). The
 auth-gated ones return `-32001 Unauthorized` with a
-`WWW-Authenticate` header — RFC 6750 compliant.
+`WWW-Authenticate` header, RFC 6750 compliant.
 
 #### Trying the auth-gated parts
 
@@ -121,6 +131,122 @@ npx -y @modelcontextprotocol/inspector --cli \
 > anyone who knows the string. Never set it on a deployment reachable
 > from the internet. It is off unless you set it.
 
+#### Stateless MCP 2026-07-28
+
+Everything above speaks the session-based protocol: `initialize` first,
+then an `Mcp-Session-Id` on every follow-up. The same endpoint also
+answers the 2026-07-28 revision, which has none of that. Each request
+carries its own protocol version and client capabilities in
+`params._meta`, mirrors its method into `Mcp-Method`, and stands alone.
+
+Start with `server/discover` instead of `initialize`:
+
+```sh
+curl -sS -X POST http://127.0.0.1:3311/mcp/ \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: server/discover' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{
+        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+You get `supportedVersions`, the server capabilities, the same
+`instructions` the legacy `initialize` returns, and the cache hints
+`ttlMs: 0` / `cacheScope: "private"` (the catalog is identity-filtered,
+so it must never be shared between callers). No `Mcp-Session-Id` comes
+back, and none is expected on the next call.
+
+`accept` must list **both** `application/json` and `text/event-stream`;
+the spec requires it and the gateway answers `406` otherwise.
+
+#### Routing headers (`x-mcp-header`)
+
+`notes_by_author` is the one hand-written registration in
+`convex/mcp.ts`. Its `inputSchema` marks both arguments with
+`x-mcp-header`, so a conforming client mirrors them into HTTP headers
+and an intermediary can route or rate-limit on them without parsing the
+JSON-RPC body. On a 2026-07-28 request the gateway re-validates that
+every mirrored header matches the body **before** authorization or
+dispatch, so a proxy acting on the header and Convex executing on the
+body cannot disagree.
+
+That guarantee stops at the protocol boundary. This endpoint also serves
+session-based 2025-era clients, which never send routing headers, so
+nothing is validated for them: a legacy `tools/call` reaches
+`notes_by_author` with no `Mcp-Param-*` at all. An intermediary enforcing
+policy on these headers must also require `MCP-Protocol-Version` to name
+a revision that mandates header validation, and reject anything else.
+The transport spec calls this out; it is easy to miss.
+
+```sh
+BODY='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"notes_by_author","arguments":{"author":"dev-user","limit":25},
+        "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                 "io.modelcontextprotocol/clientCapabilities":{}}}}'
+
+curl -sS -X POST http://127.0.0.1:3311/mcp/ \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'authorization: Bearer local-dev-token' \
+  -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: tools/call' \
+  -H 'mcp-name: notes_by_author' \
+  -H 'mcp-param-author: dev-user' \
+  -H 'mcp-param-limit: 25' \
+  -d "$BODY"
+```
+
+The result is `[]` until `dev-user` has written something. Call
+`notes_create` once first (same shape, `mcp-name: notes_create`, no
+`Mcp-Param-*` headers) and the note shows up here, because the gateway
+stamps the author from the injected identity.
+
+Change one header and rerun to see the binding enforced:
+
+| Change                              | Result                             |
+| ----------------------------------- | ---------------------------------- |
+| `mcp-param-author: someone-else`    | `-32020`, HTTP 400                 |
+| `mcp-param-limit: 26`               | `-32020`, HTTP 400                 |
+| drop `mcp-param-author` entirely    | `-32020`, HTTP 400                 |
+| `mcp-param-limit: 25.0`             | accepted, integers compare numerically |
+| `mcp-param-author: =?base64?ZGV2LXVzZXI=?=` | accepted, the base64 sentinel is decoded first |
+
+`defineMcpQuery` cannot express `x-mcp-header`: it derives `inputSchema`
+from the Convex validators, which never emit the annotation. Writing the
+registration out by hand is the supported route, and it still goes into
+the same declarative `tools` array. Reaching for `gateway.register(...)`
+instead would not work here, because the imperative path clears the
+declarative fingerprint and the next request's sync drops the tool again.
+
+#### Origin validation
+
+`MCP_ALLOWED_ORIGINS` (comma-separated) turns on the gateway's `Origin`
+check. A request whose `Origin` is present but not on the list gets
+`403` before identity resolution, authorization, auditing or dispatch,
+on both protocol eras:
+
+```sh
+npx convex env set MCP_ALLOWED_ORIGINS https://claude.ai,https://claude.com
+```
+
+Both hosts, because claude.ai serves the connector from either and the
+DCR allowlist in `convex/http.ts` already accepts both. Listing only one
+means every preflight from the other fails, and the gate runs before the
+preflight branch, so the browser sees a bare `403` with no CORS headers
+and no useful error.
+
+It is unset by default, so the curl and Inspector flows above keep
+working: they send no `Origin` at all. The React UI does not exercise it
+either, because it talks to Convex directly rather than through `/mcp/`.
+Set it for any deployment a browser MCP client connects to.
+
+This is not `cors`. CORS decides what a browser may *read*;
+`allowedOrigins` decides what the endpoint is willing to *serve*. They
+are separate options on purpose: deriving one from the other means the
+permissive `cors: true` silently switches the gate off.
+
 ### C. Convex Cloud (optional)
 
 If you want to exercise the OAuth bridge end-to-end with claude.ai or
@@ -142,9 +268,9 @@ Free tier is comfortably enough for this demo.
 
 ## Env vars
 
-See [`.env.example`](./.env.example) for the full list. All
-optional — the demo runs without any of them, just with the
-auth-gated tools returning 401.
+See [`.env.example`](./.env.example) for the full list. All optional:
+the demo runs without any of them, just with the auth-gated tools
+returning 401.
 
 | Var                   | Purpose                                                       |
 | --------------------- | ------------------------------------------------------------- |
@@ -153,6 +279,8 @@ auth-gated tools returning 401.
 | `OIDC_USERINFO_PATH`  | Override if IdP uses `/userinfo` (default: `/api/oidc/userinfo`) |
 | `MCP_AUTH_SERVER_URL` | Origin to advertise via OAuth discovery (Convex `.convex.site` URL) |
 | `MCP_RESOURCE_URL`    | Resource URL for the discovery doc (defaults to `MCP_AUTH_SERVER_URL`) |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allowlist. Unset means no origin validation |
+| `MCP_DEV_BEARER_TOKEN` | **Local only.** Enables two hard-coded demo identities |
 
 ## License
 

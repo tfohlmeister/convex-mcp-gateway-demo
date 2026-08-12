@@ -12,5 +12,8 @@ export default defineSchema({
      * MCP identity, and so rows predating the field stay valid.
      */
     author: v.optional(v.string()),
-  }).index("by_title", ["title"]),
+  })
+    .index("by_title", ["title"])
+    // Backs `notes.byAuthor`, the tool that demonstrates `x-mcp-header`.
+    .index("by_author", ["author"]),
 });

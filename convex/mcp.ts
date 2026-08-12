@@ -105,6 +105,89 @@ export const tools: McpToolRegistration[] = [
     annotations: { readOnlyHint: false, destructiveHint: true },
     metadata: { roles: ["admin"] },
   }),
+  /**
+   * The one hand-written entry in this array, and the only way to use
+   * `x-mcp-header` today.
+   *
+   * MCP 2026-07-28 lets a server mirror selected tool arguments into
+   * `Mcp-Param-<Name>` HTTP headers so intermediaries (load balancers,
+   * gateways, rate limiters) can route and inspect a call without parsing
+   * the JSON-RPC body. On a 2026-07-28 request the gateway re-validates
+   * that every mirrored header matches the body before authorization or
+   * dispatch, so a proxy routing on the header and Convex executing on
+   * the body cannot disagree. A mismatch is `-32020`, and a client that
+   * omits a required `Mcp-Param-*` is rejected the same way.
+   *
+   * That guarantee is scoped to the modern protocol. This endpoint also
+   * serves session-based 2025-era clients, and those never send routing
+   * headers, so nothing is validated for them. An intermediary that
+   * enforces policy on `Mcp-Param-*` must therefore also require the
+   * `MCP-Protocol-Version` header to name a revision that mandates
+   * header validation, and reject the request otherwise. The transport
+   * spec says exactly this. A deployment that cannot do that should stop
+   * serving the legacy era instead of relying on the headers.
+   *
+   * `defineMcpQuery` cannot express this: it derives `inputSchema` from
+   * the Convex validators, which never emit the annotation. So the
+   * registration is written out by hand. It still goes through the same
+   * declarative `tools` array, which is typed `McpToolRegistration[]`;
+   * `gateway.register(...)` would be the wrong tool here, because the
+   * imperative path clears the declarative fingerprint and the next
+   * request's sync would drop the tool again.
+   *
+   * Constraints the gateway enforces at sync time, with the tool named in
+   * the error: the annotation must be reachable through a chain of
+   * `properties` keys only (never via `items`, `anyOf`/`oneOf`/`allOf`,
+   * `if`/`then`/`else` or `$ref`), names must be case-insensitively
+   * unique, and only string, integer and boolean properties qualify.
+   */
+  {
+    name: "notes_by_author",
+    description:
+      "List notes written by one MCP subject. Mirrors both arguments " +
+      "into Mcp-Param-Author and Mcp-Param-Limit headers.",
+    kind: "query",
+    fn: api.notes.byAuthor,
+    functionReference: api.notes.byAuthor,
+    inputSchema: {
+      type: "object",
+      properties: {
+        author: {
+          type: "string",
+          description: "MCP subject that created the notes.",
+          // Routing keys are the point of this mechanism: a real
+          // deployment shards or rate-limits per tenant or per user
+          // without the proxy ever reading the body.
+          "x-mcp-header": "Author",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          description: "Maximum number of notes to return.",
+          // Integers are compared numerically, so a client sending
+          // `Mcp-Param-Limit: 25.0` for a body value of 25 is accepted.
+          "x-mcp-header": "Limit",
+        },
+      },
+      required: ["author", "limit"],
+      additionalProperties: false,
+    },
+    title: "Notes by author",
+    annotations: { readOnlyHint: true },
+    // Any authenticated caller may pass any subject here. That exposes
+    // nothing new in this demo, because `notes_list` already hands the
+    // whole table to the same callers, but do not copy the shape into a
+    // deployment where it would: there, drop the argument and declare
+    // `identityArg` so the gateway fills the subject server-side and a
+    // client cannot ask about anyone else.
+    //
+    // The two do not combine usefully. Header validation runs before the
+    // gateway strips an identity-injected argument, so mirroring one
+    // into a header would make the client send a value that is checked
+    // and then thrown away. Routing headers are for values the client
+    // legitimately supplies.
+  },
   defineMcpQuery({
     name: "notes_count",
     description: "Return the total number of notes. Public.",
