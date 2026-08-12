@@ -17,13 +17,13 @@ const gateway = new McpGateway(components.mcpGateway);
 //   OIDC_ISSUER=https://your-tenant.eu.auth0.com
 //   OIDC_CLIENT_ID=abc123...
 // When unset (the default for `pnpm local:start`), the OAuth bridge
-// routes still mount but return empty metadata — public tools work,
+// routes still mount but return empty metadata: public tools work,
 // auth-gated tools return 401.
 const OIDC_ISSUER = process.env.OIDC_ISSUER ?? "";
 const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID ?? "";
 // Userinfo endpoint path. Defaults to the OIDC standard
 // `/api/oidc/userinfo` (Pocket-ID), but Auth0/Authentik/Keycloak
-// expose it elsewhere — override with OIDC_USERINFO_PATH.
+// expose it elsewhere, override with OIDC_USERINFO_PATH.
 const OIDC_USERINFO_PATH =
   process.env.OIDC_USERINFO_PATH ?? "/api/oidc/userinfo";
 
@@ -42,6 +42,31 @@ const OIDC_USERINFO_PATH =
  * the `admin` group to anyone who knows the string.
  */
 const DEV_BEARER_TOKEN = process.env.MCP_DEV_BEARER_TOKEN ?? "";
+
+/**
+ * Comma-separated origin allowlist, e.g.
+ *   MCP_ALLOWED_ORIGINS=https://claude.ai,https://claude.com
+ *
+ * MCP requires servers to validate the `Origin` header against DNS
+ * rebinding. The gateway does it only when `allowedOrigins` is set, and a
+ * request whose `Origin` is present but not on the list gets 403 before
+ * identity resolution, authorization, auditing or dispatch, on both
+ * protocol eras.
+ *
+ * Unset by default so the local walkthrough keeps working: curl and the
+ * Inspector send no `Origin` at all, and the React UI talks to Convex
+ * directly rather than through `/mcp/`, so nothing here would exercise it
+ * locally. Set it for any deployment a browser MCP client connects to.
+ *
+ * Note this is NOT `cors`. CORS decides what a browser is allowed to
+ * read; `allowedOrigins` decides what this endpoint is willing to serve.
+ * Deriving one from the other means the permissive `cors: true` below
+ * would silently switch the gate off.
+ */
+const ALLOWED_ORIGINS: string[] = (process.env.MCP_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin: string) => origin.trim())
+  .filter(Boolean);
 
 /**
  * Validate Bearer tokens by hitting the IdP's userinfo endpoint. The
@@ -130,6 +155,9 @@ const mcpHandler = httpAction(async (ctx, request) =>
   gateway.handleMcpRequest(ctx, request, {
     authorize,
     cors: true,
+    ...(ALLOWED_ORIGINS.length > 0
+      ? { allowedOrigins: ALLOWED_ORIGINS }
+      : {}),
     resolveIdentity,
     // Declarative catalog: the registry is reconciled from this list on
     // each initialize, so no registerDefaults mutation is needed.
@@ -147,7 +175,7 @@ const mcpHandler = httpAction(async (ctx, request) =>
     initializeInstructions: instructions,
   } satisfies HandleMcpRequestOptions),
 );
-// Mount both /mcp/ and /mcp — claude.ai strips the trailing slash
+// Mount both /mcp/ and /mcp, because claude.ai strips the trailing slash
 // before POSTing, even when the user typed it explicitly.
 for (const path of ["/mcp/", "/mcp"]) {
   http.route({ path, method: "POST", handler: mcpHandler });
@@ -173,7 +201,7 @@ http.route({
 // AS metadata wraps the upstream IdP and advertises THIS deployment as
 // the authorization server, substituting our own `/oauth/register` so
 // claude.ai's DCR lands here instead of upstream. `issuer` override
-// matches the upstream's actual token claims — strict id_token.iss
+// matches the upstream's actual token claims, because strict id_token.iss
 // validators reject the flow otherwise (see docs/oauth-bridge.md
 // "Pitfalls"). Only mounted when OIDC_ISSUER is configured.
 if (OIDC_ISSUER) {

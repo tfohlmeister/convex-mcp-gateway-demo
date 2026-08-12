@@ -12,8 +12,8 @@ importers:
         specifier: ^1.43.0
         version: 1.43.0(react@19.2.8)
       convex-mcp-gateway:
-        specifier: ^0.6.1
-        version: 0.6.1(convex@1.43.0(react@19.2.8))
+        specifier: ^0.7.0
+        version: 0.7.0(convex@1.43.0(react@19.2.8))
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -527,8 +527,8 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  convex-mcp-gateway@0.6.1:
-    resolution: {integrity: sha512-ZLKD/CDZKPHscvsi8aTAxlqBxOrOX5j9Bcnj+3s8ROejywWAPvTWK+RcxfhCo7L9cYAXupQolnbe8IuC87/LMA==}
+  convex-mcp-gateway@0.7.0:
+    resolution: {integrity: sha512-pslxSrsIxi/ALSWOnr/J/L2NlRT3k9jxsw9QDDcRr4Q/FmVpsX7/V111rdNrieKz7P3L06xolS36QBs07gEIzQ==}
     peerDependencies:
       convex: ^1.35.0
 
@@ -1151,7 +1151,7 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-mcp-gateway@0.6.1(convex@1.43.0(react@19.2.8)):
+  convex-mcp-gateway@0.7.0(convex@1.43.0(react@19.2.8)):
     dependencies:
       convex: 1.43.0(react@19.2.8)
 

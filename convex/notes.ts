@@ -66,6 +66,30 @@ export const remove = mutation({
   },
 });
 
+/**
+ * Notes written by one MCP subject, newest first.
+ *
+ * Exposed as the `notes_by_author` tool, which mirrors both arguments
+ * into `Mcp-Param-*` HTTP headers via `x-mcp-header` (see convex/mcp.ts).
+ * Nothing here knows about that: header mirroring is a transport concern
+ * the gateway validates before dispatch, so this stays an ordinary query.
+ */
+export const byAuthor = query({
+  args: { author: v.string(), limit: v.number() },
+  returns: v.array(noteValidator),
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query("notes")
+      .withIndex("by_author", (q) => q.eq("author", args.author))
+      .order("desc")
+      // Floor before clamping. The `type: "integer"` in the tool's schema
+      // is advisory: the gateway only enforces it against the mirrored
+      // header, and only on 2026-07-28 requests. A session-based caller
+      // can send `limit: 25.5` straight through, and `.take()` rejects a
+      // non-integer with an opaque tool-execution error.
+      .take(Math.min(Math.max(Math.floor(args.limit), 1), 100)),
+});
+
 export const count = query({
   args: {},
   returns: v.object({ total: v.number() }),
