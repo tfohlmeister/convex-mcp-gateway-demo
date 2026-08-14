@@ -2,7 +2,7 @@
 import { convexTest } from "convex-test";
 import { register } from "convex-mcp-gateway/test";
 import { createFunctionHandle } from "convex/server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { api, components } from "./_generated/api.js";
 import { instructions } from "./mcp.js";
 import schema from "./schema.js";
@@ -255,7 +255,7 @@ describe("initialize", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
     });
     const body = (await listed.json()) as { result: { tools: ToolEntry[] } };
-    expect(body.result.tools).toHaveLength(7);
+    expect(body.result.tools).toHaveLength(10);
   });
 
   test("returns the instructions declared in convex/mcp.ts", async () => {
@@ -303,6 +303,7 @@ describe("tools/list per identity", () => {
       "notes_by_author",
       "notes_count",
       "notes_list",
+      "notes_search",
       "notes_whoami",
     ]);
   });
@@ -315,6 +316,9 @@ describe("tools/list per identity", () => {
       "notes_create",
       "notes_delete",
       "notes_list",
+      "notes_purge",
+      "notes_reindex",
+      "notes_search",
       "notes_update",
       "notes_whoami",
     ]);
@@ -922,8 +926,22 @@ async function modern(
   method: string,
   params: Record<string, unknown> = {},
   headers: AuthHeaders = ANON,
+  // What the client says it can do. The gateway refuses to open an MRTR
+  // round a client could not answer (-32021), so a test that drives one
+  // has to declare elicitation the way a real client does.
+  capabilities: Record<string, unknown> = {},
 ): Promise<Response> {
-  const name = typeof params.name === "string" ? params.name : undefined;
+  // 2026-07-28 mirrors the request's "subject" into Mcp-Name, and which
+  // field that is depends on the method: the tool for a call, the URI
+  // for a read, the task id for a poll. A mismatch is -32020 before
+  // anything else runs.
+  const subject =
+    method === "resources/read"
+      ? params.uri
+      : method === "tasks/get" || method === "tasks/update"
+        ? params.taskId
+        : params.name;
+  const name = typeof subject === "string" ? subject : undefined;
   return await t.fetch("/mcp/", {
     method: "POST",
     headers: {
@@ -938,7 +956,13 @@ async function modern(
       jsonrpc: "2.0",
       id: 1,
       method,
-      params: { ...params, _meta: MODERN_META },
+      params: {
+        ...params,
+        _meta: {
+          ...MODERN_META,
+          "io.modelcontextprotocol/clientCapabilities": capabilities,
+        },
+      },
     }),
   });
 }
@@ -1167,5 +1191,369 @@ describe("origin validation is off by default", () => {
     });
 
     expect(res.status).toBe(200);
+  });
+});
+
+// =================================================================
+// MRTR: the confirmation round on notes_purge. The value under test is
+// that the mutation does not run until an answer arrives, so every
+// assertion below also checks the store, not just the envelope.
+// =================================================================
+
+/** A client that can show the user a form, which MRTR requires. */
+const ELICITING = { elicitation: { form: {} } };
+
+type MrtrEnvelope = Envelope<{
+  resultType?: string;
+  requestState?: string;
+  inputRequests?: Record<string, unknown>;
+  content?: { type: string; text: string }[];
+  structuredContent?: { deleted: number; replayed: boolean };
+  isError?: boolean;
+}>;
+
+async function seedNotes(t: Harness, count: number) {
+  await t.run(async (ctx) => {
+    for (let i = 0; i < count; i++) {
+      await ctx.db.insert("notes", { title: `note ${i}`, body: "b" });
+    }
+  });
+}
+
+const noteCount = (t: Harness) =>
+  t.run(async (ctx) => (await ctx.db.query("notes").collect()).length);
+
+/** A `notes_purge` call: first round, or a continuation. */
+async function purge(
+  t: Harness,
+  params: Record<string, unknown> = {},
+): Promise<MrtrEnvelope> {
+  const res = await modern(
+    t,
+    "tools/call",
+    { name: "notes_purge", arguments: {}, ...params },
+    ADMIN,
+    ELICITING,
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as MrtrEnvelope;
+}
+
+describe("MRTR confirmation on notes_purge", () => {
+  test("the first call asks instead of deleting", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+
+    const body = await purge(t);
+
+    expect(body.result?.resultType).toBe("input_required");
+    expect(body.result?.requestState).toBeTruthy();
+    // The elicitation the client is meant to show, with the count read
+    // from the database by the hook.
+    expect(JSON.stringify(body.result?.inputRequests)).toContain(
+      "Delete all 3 notes?",
+    );
+    // The whole point: nothing was deleted.
+    expect(await noteCount(t)).toBe(3);
+  });
+
+  test("accepting deletes, and reports how many", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+    const asked = await purge(t);
+
+    const done = await purge(t, {
+      requestState: asked.result!.requestState,
+      inputResponses: { confirm: { action: "accept", content: { confirm: true } } },
+    });
+
+    expect(done.result?.resultType).not.toBe("input_required");
+    expect(done.result?.structuredContent).toEqual({
+      deleted: 3,
+      replayed: false,
+    });
+    expect(await noteCount(t)).toBe(0);
+  });
+
+  test("declining deletes nothing and never dispatches", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+    const asked = await purge(t);
+
+    const done = await purge(t, {
+      requestState: asked.result!.requestState,
+      inputResponses: { confirm: { action: "decline" } },
+    });
+
+    expect(done.result?.content?.[0]?.text).toBe("Nothing was deleted.");
+    expect(done.result?.isError).toBe(false);
+    expect(await noteCount(t)).toBe(3);
+    // A decline is not the tool reporting failure, it is the call
+    // finishing without one, so no dispatch was audited.
+    const audited = await t.query(api.mcp.recentAudit, {});
+    expect(
+      audited.some(
+        (row: { toolName?: string; outcome?: string }) =>
+          row.toolName === "notes_purge" && row.outcome === "allowed",
+      ),
+    ).toBe(false);
+  });
+
+  test("a malformed answer asks again rather than guessing", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+    const asked = await purge(t);
+
+    const again = await purge(t, {
+      requestState: asked.result!.requestState,
+      // `accept` with the box unticked is not consent.
+      inputResponses: { confirm: { action: "accept", content: { confirm: false } } },
+    });
+
+    expect(again.result?.content?.[0]?.text).toBe("Nothing was deleted.");
+    expect(await noteCount(t)).toBe(2);
+  });
+
+  test("a continuation cannot be replayed against a refilled store", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+    const asked = await purge(t);
+    const answer = {
+      requestState: asked.result!.requestState,
+      inputResponses: { confirm: { action: "accept", content: { confirm: true } } },
+    };
+    const first = await purge(t, answer);
+    expect(first.result?.structuredContent).toEqual({
+      deleted: 3,
+      replayed: false,
+    });
+
+    // The user writes new notes, then the client re-sends the same
+    // confirmation because it never saw the response.
+    await seedNotes(t, 2);
+    const replay = await purge(t, answer);
+
+    // Whatever the gateway answers here, the new notes must survive: one
+    // confirmation authorises one purge.
+    expect(await noteCount(t)).toBe(2);
+    expect(replay.result?.structuredContent?.deleted).not.toBe(2);
+  });
+
+  test("a continuation aimed at another tool is refused", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+    const asked = await purge(t);
+
+    // The seal binds the state to the tool and arguments it was minted
+    // for, so re-pointing it is not a matter of the client's honesty.
+    const res = await modern(
+      t,
+      "tools/call",
+      {
+        name: "notes_reindex",
+        arguments: {},
+        requestState: asked.result!.requestState,
+        inputResponses: { confirm: { action: "accept", content: { confirm: true } } },
+      },
+      ADMIN,
+      ELICITING,
+    );
+    const body = (await res.json()) as MrtrEnvelope;
+
+    expect(body.error).toBeDefined();
+    expect(await noteCount(t)).toBe(3);
+  });
+
+  test("the confirmation key never appears in the advertised schema", async () => {
+    const t = newTest();
+    const res = await modern(t, "tools/list", {}, ADMIN);
+    const body = (await res.json()) as Envelope<{
+      tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[];
+    }>;
+    const tool = body.result!.tools.find((x) => x.name === "notes_purge");
+
+    // A client that could set it could replay someone else's key.
+    expect(tool!.inputSchema.properties ?? {}).not.toHaveProperty(
+      "confirmationKey",
+    );
+  });
+});
+
+// =================================================================
+// MCP Tasks on notes_reindex. The mount passes `tasks: {}`, so the
+// component's built-in scheduled executor runs the tool after the HTTP
+// request returns; the tests drive the scheduler explicitly.
+// =================================================================
+
+/**
+ * A client that can poll tasks. Note the key is the namespaced one,
+ * unlike `elicitation` above: the gateway refuses a task-augmented call
+ * from a client that did not declare it, so a client which cannot poll
+ * never gets a handle it would abandon.
+ */
+const TASKING = { "io.modelcontextprotocol/tasks": {} };
+
+type TaskEnvelope = Envelope<{
+  task?: { taskId: string; status: string };
+  content?: { type: string; text: string }[];
+  structuredContent?: { scanned: number; authors: { author: string; notes: number }[] };
+}>;
+
+describe("MCP tasks on notes_reindex", () => {
+  test("a task call returns a handle and runs after the request", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = newTest();
+      await seedNotes(t, 4);
+
+      const res = await modern(
+        t,
+        "tools/call",
+        { name: "notes_reindex", arguments: {}, task: {} },
+        ADMIN,
+        TASKING,
+      );
+      expect(res.status).toBe(200);
+      const created = (await res.json()) as TaskEnvelope;
+      const taskId = created.result?.task?.taskId;
+      expect(taskId).toBeTruthy();
+      // Not done yet: the executor is scheduled, not inline.
+      expect(created.result?.task?.status).toBe("working");
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const polled = await modern(
+        t,
+        "tasks/get",
+        { taskId },
+        ADMIN,
+        TASKING,
+      );
+      const body = (await polled.json()) as TaskEnvelope;
+      expect(body.result?.task?.status).toBe("completed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the same tool called synchronously needs no task at all", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    // One catalog, both shapes: a client that cannot poll just gets the
+    // answer, which is what keeps legacy clients working.
+    const res = await modern(
+      t,
+      "tools/call",
+      { name: "notes_reindex", arguments: {} },
+      ADMIN,
+    );
+    const body = (await res.json()) as TaskEnvelope;
+
+    expect(body.result?.task).toBeUndefined();
+    expect(body.result?.structuredContent?.scanned).toBe(2);
+  });
+
+  test("a tool without taskSupport refuses a task request", async () => {
+    const t = newTest();
+    // Opting in is per tool, not per mount: `notes_list` never declared
+    // it, so asking for a task must not silently run it synchronously.
+    const res = await modern(
+      t,
+      "tools/call",
+      { name: "notes_list", arguments: {}, task: {} },
+      ADMIN,
+      TASKING,
+    );
+    const body = (await res.json()) as TaskEnvelope;
+
+    expect(body.error).toBeDefined();
+    expect(body.result?.task).toBeUndefined();
+  });
+});
+
+// =================================================================
+// Bounded $ref and composition on notes_search.
+// =================================================================
+
+describe("$ref and composition on notes_search", () => {
+  test("the host writes $ref, the client receives it resolved", async () => {
+    const t = newTest();
+    const res = await modern(t, "tools/list", {}, ADMIN);
+    const body = (await res.json()) as Envelope<{
+      tools: { name: string; inputSchema: Record<string, unknown> }[];
+    }>;
+    const tool = body.result!.tools.find((x) => x.name === "notes_search");
+
+    // This is what the bounded resolver buys: the host factors the
+    // condition out once, and every client gets a self-contained schema
+    // whether or not it can follow a `$ref`. Nothing dangles.
+    const advertised = JSON.stringify(tool!.inputSchema);
+    expect(advertised).not.toContain("$ref");
+    expect(advertised).not.toContain("$defs");
+    // Both anyOf branches carry the resolved condition, the second one
+    // nested inside `items`, which is where a shallow resolver stops.
+    const schema = tool!.inputSchema as {
+      properties: { filter: { anyOf: [Record<string, unknown>, Record<string, unknown>] } };
+    };
+    const [single, conjunction] = schema.properties.filter.anyOf;
+    expect(single).toHaveProperty("properties.field.enum", ["title", "body"]);
+    expect(conjunction).toHaveProperty(
+      "properties.all.items.properties.field.enum",
+      ["title", "body"],
+    );
+  });
+
+  test("a single condition dispatches through the anyOf branch", async () => {
+    const t = newTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("notes", { title: "shopping", body: "milk" });
+      await ctx.db.insert("notes", { title: "meeting", body: "agenda" });
+    });
+
+    const body = await once<{ structuredContent?: unknown; content: { text: string }[] }>(
+      t,
+      ADMIN,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "notes_search",
+          arguments: { filter: { field: "title", contains: "shop" } },
+        },
+      },
+    );
+
+    const found = JSON.parse(body.result!.content[0]!.text) as { title: string }[];
+    expect(found.map((n) => n.title)).toEqual(["shopping"]);
+  });
+
+  test("an `all` conjunction dispatches through the other branch", async () => {
+    const t = newTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("notes", { title: "shopping", body: "milk" });
+      await ctx.db.insert("notes", { title: "shopping", body: "bread" });
+    });
+
+    const body = await once<{ content: { text: string }[] }>(t, ADMIN, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "notes_search",
+        arguments: {
+          filter: {
+            all: [
+              { field: "title", contains: "shop" },
+              { field: "body", contains: "milk" },
+            ],
+          },
+        },
+      },
+    });
+
+    const found = JSON.parse(body.result!.content[0]!.text) as { body: string }[];
+    expect(found.map((n) => n.body)).toEqual(["milk"]);
   });
 });

@@ -90,6 +90,101 @@ export const byAuthor = query({
       .take(Math.min(Math.max(Math.floor(args.limit), 1), 100)),
 });
 
+/**
+ * Delete every note.
+ *
+ * Exposed as `notes_purge`, whose `beforeCall` hook requires an explicit
+ * confirmation round before this ever runs (see convex/mcp.ts). Nothing
+ * here knows about that: the negotiation is the gateway's job.
+ *
+ * `confirmationKey` is filled by the gateway with the confirmed
+ * continuation's idempotency key, never by the client, and it is what
+ * makes a retry safe. A tool with side effects has to persist that key
+ * around them itself; the gateway guarantees the key is stable per
+ * confirmation, not that your mutation is idempotent.
+ */
+export const purge = mutation({
+  args: { confirmationKey: v.optional(v.string()) },
+  returns: v.object({ deleted: v.number(), replayed: v.boolean() }),
+  handler: async (ctx, args) => {
+    const key = args.confirmationKey;
+    if (key !== undefined) {
+      const prior = await ctx.db
+        .query("purges")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      // Same confirmation, seen before: report what it did rather than
+      // emptying a store the user has refilled since.
+      if (prior) return { deleted: prior.deleted, replayed: true };
+    }
+    const all = await ctx.db.query("notes").collect();
+    for (const note of all) await ctx.db.delete(note._id);
+    if (key !== undefined) {
+      await ctx.db.insert("purges", { key, deleted: all.length });
+    }
+    return { deleted: all.length, replayed: false };
+  },
+});
+
+/**
+ * Walk every note and report a per-author tally.
+ *
+ * Exposed as `notes_reindex` with `taskSupport: true`, so a modern
+ * client may run it as an MCP task and poll `tasks/get` instead of
+ * holding the request open. It is an ordinary mutation: which execution
+ * path it took is invisible here, which is the point.
+ */
+export const reindex = mutation({
+  args: {},
+  returns: v.object({
+    scanned: v.number(),
+    authors: v.array(v.object({ author: v.string(), notes: v.number() })),
+  }),
+  handler: async (ctx) => {
+    const all = await ctx.db.query("notes").collect();
+    const tally = new Map<string, number>();
+    for (const note of all) {
+      const author = note.author ?? "(unattributed)";
+      tally.set(author, (tally.get(author) ?? 0) + 1);
+    }
+    return {
+      scanned: all.length,
+      authors: [...tally.entries()]
+        .map(([author, notes]) => ({ author, notes }))
+        .sort((a, b) => a.author.localeCompare(b.author)),
+    };
+  },
+});
+
+/** One `field contains substring` test, the leaf of a search filter. */
+const searchLeaf = v.object({
+  field: v.union(v.literal("title"), v.literal("body")),
+  contains: v.string(),
+});
+
+/**
+ * Search notes with either a single condition or a conjunction of them.
+ *
+ * Exposed as `notes_search`, whose advertised `inputSchema` expresses
+ * this shape with `$defs` + `$ref` + `anyOf` rather than by inlining the
+ * leaf twice (see convex/mcp.ts). The gateway resolves those bounded
+ * references when it inspects the schema, which is what this tool is
+ * here to demonstrate.
+ */
+export const search = query({
+  args: { filter: v.union(searchLeaf, v.object({ all: v.array(searchLeaf) })) },
+  returns: v.array(noteValidator),
+  handler: async (ctx, args) => {
+    const leaves = "all" in args.filter ? args.filter.all : [args.filter];
+    const all = await ctx.db.query("notes").collect();
+    return all.filter((note) =>
+      leaves.every((leaf) =>
+        note[leaf.field].toLowerCase().includes(leaf.contains.toLowerCase()),
+      ),
+    );
+  },
+});
+
 export const count = query({
   args: {},
   returns: v.object({ total: v.number() }),

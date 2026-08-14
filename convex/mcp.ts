@@ -1,9 +1,11 @@
 import {
   McpGateway,
+  completeCall,
   defineMcpMutation,
   defineMcpQuery,
   defineMcpResource,
   defineMcpResourceTemplate,
+  inputRequired,
   mcpCallerValidator,
   type McpResourceRegistration,
   type McpResourceTemplateProvider,
@@ -187,6 +189,205 @@ export const tools: McpToolRegistration[] = [
     // into a header would make the client send a value that is checked
     // and then thrown away. Routing headers are for values the client
     // legitimately supplies.
+  },
+  /**
+   * MRTR (multi round-trip requests) plus MCP elicitation, on the most
+   * destructive operation in the demo.
+   *
+   * The gateway runs `beforeCall` BEFORE dispatch, so `notes.purge` does
+   * not execute until this hook returns `null`. A first call answers
+   * `resultType: "input_required"` carrying an HMAC-sealed
+   * `requestState`; the client asks its user, then re-sends that state
+   * with the answer. The seal is what makes the round trip safe: the
+   * gateway will not accept a continuation it did not mint, aimed at a
+   * different tool, or carrying different arguments.
+   *
+   * `mrtrArgs.idempotencyKey` names the argument the gateway fills with
+   * the confirmed continuation's key. It is stripped from the advertised
+   * `inputSchema`, so a client can neither see nor spoof it, and it is
+   * stable across retries of the SAME confirmation. `notes.purge`
+   * persists it around the delete, which is what turns "the response got
+   * lost, ask again" into a replay rather than a second purge.
+   *
+   * Declining is handled entirely here: `completeCall` finishes the
+   * request without ever dispatching, so the refusal is structural
+   * rather than a check inside the mutation that could be forgotten.
+   */
+  defineMcpMutation({
+    name: "notes_purge",
+    description:
+      "Delete every note. Asks for confirmation first and will not run " +
+      "without it.",
+    fn: api.notes.purge,
+    args: {
+      // Gateway-only: filled with the confirmed continuation's
+      // idempotency key. Absent from tools/list, unspoofable.
+      confirmationKey: v.optional(v.string()),
+    },
+    returns: v.object({ deleted: v.float64(), replayed: v.boolean() }),
+    mrtrArgs: { idempotencyKey: "confirmationKey" },
+    beforeCall: async (ctx, { inputResponses, round }) => {
+      // The hook runs in the HOST, not in the component, so it can read
+      // the database and tell the user what they are about to lose. The
+      // gateway types this ctx as `{ auth } & Record<string, unknown>`,
+      // so `runQuery` needs narrowing before use.
+      const { runQuery } = ctx as unknown as {
+        runQuery: (
+          ref: typeof api.notes.count,
+          args: Record<string, never>,
+        ) => Promise<{ total: number }>;
+      };
+      const ask = async () => {
+        const { total } = await runQuery(api.notes.count, {});
+        return inputRequired(
+          {
+            confirm: {
+              method: "elicitation/create",
+              params: {
+                mode: "form",
+                message: `Delete all ${total} notes? This cannot be undone.`,
+                requestedSchema: {
+                  type: "object",
+                  properties: {
+                    confirm: {
+                      type: "boolean",
+                      description: "Confirm deleting every note.",
+                    },
+                  },
+                  required: ["confirm"],
+                },
+              },
+            },
+          },
+          // Opaque host state, sealed into `requestState` and handed
+          // back on the continuation. Carried here to show the channel;
+          // it is not trusted input on the way back, it is verified.
+          { askedAt: Date.now(), noteCount: total },
+        );
+      };
+      // Discriminate on `round`, not on `inputResponses`: a state-only
+      // retry is a continuation, not a first call.
+      if (round === undefined) return await ask();
+      // `inputResponses` is client-controlled. The seal proves the round
+      // belongs to this call; it says nothing about the answer's shape.
+      const answer = inputResponses?.confirm as
+        | { action?: string; content?: { confirm?: unknown } }
+        | undefined;
+      if (answer === undefined) return await ask(); // no answer yet: ask again
+      if (answer.action !== "accept" || answer.content?.confirm !== true) {
+        // Declined or cancelled: finish WITHOUT dispatching. The
+        // mutation never runs, gateway-side by construction.
+        return completeCall({
+          content: [{ type: "text", text: "Nothing was deleted." }],
+          isError: false,
+        });
+      }
+      return null; // accepted: dispatch, with confirmationKey injected
+    },
+    title: "Purge all notes",
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    metadata: { roles: ["admin"] },
+  }),
+  /**
+   * MCP Tasks. `taskSupport: true` lets a modern client send
+   * `tools/call` with a `task` request and poll `tasks/get` for the
+   * result instead of holding the request open.
+   *
+   * The mount in convex/http.ts passes `tasks: {}`, i.e. no `execute`,
+   * so the component's built-in scheduled executor runs this tool once
+   * after the HTTP request returns. That is durable across restarts and
+   * deliberately does not retry: a mutation that already committed must
+   * not run twice.
+   *
+   * Tasks exist only on `2026-07-28`. A session-based client calling
+   * this tool gets the ordinary synchronous result, with no task and no
+   * error, so the same catalog serves both eras.
+   */
+  defineMcpMutation({
+    name: "notes_reindex",
+    description:
+      "Walk every note and report a per-author tally. Task-capable: a " +
+      "modern client may poll for the result.",
+    fn: api.notes.reindex,
+    args: {},
+    returns: v.object({
+      scanned: v.float64(),
+      authors: v.array(
+        v.object({ author: v.string(), notes: v.float64() }),
+      ),
+    }),
+    taskSupport: true,
+    title: "Reindex notes",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    metadata: { roles: ["admin"] },
+  }),
+  /**
+   * Bounded JSON Schema 2020-12 `$ref` and composition.
+   *
+   * The filter is either one condition or a conjunction of them, and the
+   * schema says so with `$defs` + `$ref` + `anyOf` instead of inlining
+   * the leaf twice.
+   *
+   * The gateway RESOLVES those references at registration and advertises
+   * the expanded, self-contained form: what a client receives here has
+   * no `$ref` and no `$defs` left in it. That is the point. The host
+   * gets to factor a shared shape out once, and a client that cannot
+   * follow a reference still sees a complete schema. Resolution is
+   * bounded in depth and total work, so a cyclic or hostile schema
+   * cannot hang the request; it is rejected at sync time with the tool
+   * named.
+   *
+   * Written out by hand for the same reason as `notes_by_author`:
+   * `defineMcpQuery` derives `inputSchema` from the Convex validators,
+   * which inline everything and never emit `$defs`. The Convex function
+   * still validates the argument, so the two agree on what is legal;
+   * only the advertised description is factored differently.
+   */
+  {
+    name: "notes_search",
+    description:
+      "Find notes by substring, either on one field or on several at once.",
+    kind: "query",
+    fn: api.notes.search,
+    functionReference: api.notes.search,
+    inputSchema: {
+      type: "object",
+      $defs: {
+        condition: {
+          type: "object",
+          properties: {
+            field: { type: "string", enum: ["title", "body"] },
+            contains: { type: "string", minLength: 1 },
+          },
+          required: ["field", "contains"],
+          additionalProperties: false,
+        },
+      },
+      properties: {
+        filter: {
+          description: "One condition, or an `all` conjunction of them.",
+          anyOf: [
+            { $ref: "#/$defs/condition" },
+            {
+              type: "object",
+              properties: {
+                all: {
+                  type: "array",
+                  minItems: 1,
+                  items: { $ref: "#/$defs/condition" },
+                },
+              },
+              required: ["all"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["filter"],
+      additionalProperties: false,
+    },
+    title: "Search notes",
+    annotations: { readOnlyHint: true },
   },
   defineMcpQuery({
     name: "notes_count",

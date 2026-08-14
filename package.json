@@ -13,6 +13,7 @@
     "convex:run": "convex run",
     "convex:env": "convex env",
     "local:devtoken": "convex env set MCP_DEV_BEARER_TOKEN local-dev-token",
+    "local:mrtrsecret": "convex env set MCP_MRTR_SECRET local-dev-mrtr-secret-32-chars-min",
     "test": "vitest run",
     "dev": "vite",
     "build": "vite build",

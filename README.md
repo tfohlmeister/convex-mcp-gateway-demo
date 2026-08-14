@@ -9,7 +9,7 @@ a Convex-backed notes table is exposed as MCP tools, gated by an
 
 ### Tools
 
-Seven MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
+Ten MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
 to `handleMcpRequest({ tools })`. The gateway reconciles the registry on
 every `initialize` and before every stateless 2026-07-28 request, so
 editing the array takes effect on the next client connect. **There is no
@@ -24,6 +24,9 @@ registration step to run by hand.**
 | `notes_update` | mutation | role `admin`  | nested-path arg redaction (`redact: ["body"]`) |
 | `notes_delete` | mutation | role `admin`  | mutation through the authorizer                |
 | `notes_by_author` | query | auth required | `x-mcp-header`: two arguments mirrored into `Mcp-Param-*` routing headers (see below) |
+| `notes_purge`  | mutation | role `admin`  | **MRTR + elicitation**: confirms before deleting, and replay-safe (see below) |
+| `notes_reindex` | mutation | role `admin` | **MCP Tasks**: a modern client may poll instead of waiting |
+| `notes_search` | query    | auth required | **bounded `$ref`**: a `$defs` schema the gateway resolves for the client |
 
 `notes_by_author` takes the subject as an ordinary argument, so any
 authenticated caller can ask about any author. That exposes nothing extra
@@ -32,6 +35,45 @@ table, but do not copy the shape into a deployment where it would: drop
 the argument and declare `identityArg`, so the gateway fills the subject
 server-side. The two features do not combine, and the reason is in the
 comment above the registration in `convex/mcp.ts`.
+
+### Confirmation before a destructive call (MRTR)
+
+`notes_purge` deletes every note, so it asks first. The `beforeCall` hook
+in `convex/mcp.ts` runs **before** dispatch: the first call answers
+`resultType: "input_required"` with an MCP elicitation and an
+HMAC-sealed `requestState`, and `notes.purge` does not execute until the
+client sends that state back with an answer.
+
+Three properties are worth reading the code for:
+
+- **A decline never dispatches.** The hook returns `completeCall(...)`
+  and the mutation is not called at all, so the refusal is structural
+  rather than a check inside the mutation that someone could forget.
+- **The seal is not a formality.** It binds the continuation to the tool
+  and the arguments it was minted for, so a state cannot be re-pointed at
+  another tool or another purge.
+- **One confirmation authorises one purge.** The gateway injects the
+  continuation's idempotency key into `confirmationKey`, which the
+  mutation persists in the `purges` table around the delete. A client
+  that lost the response and retries gets the original answer back
+  instead of emptying a store the user has refilled since.
+
+Requires `MCP_MRTR_SECRET`. Without it the tool **fails closed**: it
+refuses with `-32603` rather than running unconfirmed, which is the
+behaviour `convex/mrtr-unconfigured.test.ts` pins down.
+
+### Long-running calls (MCP Tasks)
+
+The mount passes `tasks: {}`, so a `2026-07-28` client that declares the
+`io.modelcontextprotocol/tasks` capability may send `tools/call` with a
+`task` request for `notes_reindex` and poll `tasks/get` for the result.
+Without `execute`, the component's built-in scheduled executor runs the
+tool once after the HTTP request returns: durable across restarts, and
+deliberately no retries, because a mutation that already committed must
+not run twice.
+
+The same tool called without a `task` request just returns its answer,
+which is what keeps one catalog serving both protocol eras.
 
 ### Resources
 
@@ -89,6 +131,7 @@ pnpm local:start          # downloads pinned convex-local-backend binary
                           # writes .env.local, runs on :3310 / :3311
 pnpm convex:dev           # codegen + push functions to local backend
 pnpm local:devtoken       # optional, see "Trying the auth-gated parts"
+pnpm local:mrtrsecret     # optional, needed for notes_purge's confirmation
 pnpm dev                  # http://localhost:5173, UI runs against local
 ```
 
@@ -130,6 +173,23 @@ npx -y @modelcontextprotocol/inspector --cli \
 > **Local only.** `MCP_DEV_BEARER_TOKEN` hands the `admin` group to
 > anyone who knows the string. Never set it on a deployment reachable
 > from the internet. It is off unless you set it.
+
+#### Trying the confirmation round
+
+`pnpm local:mrtrsecret` sets `MCP_MRTR_SECRET`, without which
+`notes_purge` refuses with `-32603` instead of running unconfirmed. With
+it set, a first call answers `input_required` and a sealed
+`requestState`; sending that state back with
+
+```json
+{ "confirm": { "action": "accept", "content": { "confirm": true } } }
+```
+
+runs the purge, and `{ "action": "decline" }` finishes the call without
+the mutation ever executing. The Inspector's `--method tools/call` does
+not model the round trip, so this is easiest to watch from a client that
+supports elicitation, or from the tests in `convex/mcp.test.ts`, which
+drive both paths end to end and assert the store afterwards.
 
 #### Stateless MCP 2026-07-28
 
@@ -281,6 +341,7 @@ returning 401.
 | `MCP_RESOURCE_URL`    | Resource URL for the discovery doc (defaults to `MCP_AUTH_SERVER_URL`) |
 | `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` allowlist. Unset means no origin validation |
 | `MCP_DEV_BEARER_TOKEN` | **Local only.** Enables two hard-coded demo identities |
+| `MCP_MRTR_SECRET`     | >=32 chars, seals MRTR continuations. Unset makes `notes_purge` fail closed |
 
 ## License
 
