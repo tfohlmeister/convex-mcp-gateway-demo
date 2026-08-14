@@ -1,4 +1,8 @@
 allowBuilds:
   esbuild: true
+# Our own package, published from the sibling repo in this workspace, so
+# the release-age delay buys nothing here: we are the provenance. Kept
+# name-scoped rather than disabling the policy, which still applies to
+# every third-party dependency.
 minimumReleaseAgeExclude:
-  - convex-mcp-gateway@0.7.0
+  - convex-mcp-gateway
