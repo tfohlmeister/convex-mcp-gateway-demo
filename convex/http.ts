@@ -63,6 +63,22 @@ const DEV_BEARER_TOKEN = process.env.MCP_DEV_BEARER_TOKEN ?? "";
  * Deriving one from the other means the permissive `cors: true` below
  * would silently switch the gate off.
  */
+/**
+ * HMAC key that seals MRTR continuation state, at least 32 characters.
+ * Backs `notes_purge`'s confirmation round.
+ *
+ * Deliberately has no default. Without it the `mrtr` option is not
+ * passed, and the gateway then FAILS the confirmation-gated tool closed
+ * rather than dispatching it unconfirmed: a destructive call must not
+ * become unguarded just because a deployment forgot to configure the
+ * gate. Set it with `pnpm local:mrtrsecret` for the local walkthrough.
+ *
+ * It must also be stable. Rotating it invalidates every continuation in
+ * flight, so a user mid-confirmation is asked again rather than having
+ * their answer silently accepted under a new key.
+ */
+const MRTR_SECRET = process.env.MCP_MRTR_SECRET ?? "";
+
 const ALLOWED_ORIGINS: string[] = (process.env.MCP_ALLOWED_ORIGINS ?? "")
   .split(",")
   .map((origin: string) => origin.trim())
@@ -170,6 +186,15 @@ const mcpHandler = httpAction(async (ctx, request) =>
     // Records URI, operation, identity and outcome for reads. Never the
     // resource contents.
     auditResources: { read: true },
+    // Enables the `input_required` round trip that `notes_purge` uses to
+    // confirm before deleting. Omitted when unconfigured, which makes
+    // that tool fail closed instead of running unconfirmed.
+    ...(MRTR_SECRET ? { mrtr: { secret: MRTR_SECRET } } : {}),
+    // Opt-in MCP Tasks, advertised in `server/discover` only because
+    // this option is present. No `execute`, so the component's built-in
+    // scheduled executor runs `notes_reindex` once after the request
+    // returns; hosts needing retries or input rounds pass their own.
+    tasks: {},
     // Server-level guidance surfaced in the initialize result, so the
     // model learns the auth model without reading every description.
     initializeInstructions: instructions,

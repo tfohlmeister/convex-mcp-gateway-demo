@@ -20,6 +20,15 @@ export default defineConfig({
     // off) and would quietly weaken the CORS preflight tests. It lives in
     // convex/origin.test.ts instead, the same way OIDC_ISSUER lives in
     // convex/oauth.test.ts.
-    env: { MCP_DEV_BEARER_TOKEN: "test-dev-token" },
+    //
+    // MCP_MRTR_SECRET, by contrast, IS set globally: without it the
+    // `mrtr` option is absent and `notes_purge` fails closed, so its
+    // confirmation round would be unreachable. The fail-closed path
+    // itself is still covered, by a test that mounts a handler without
+    // the option rather than by leaving it unset for the whole suite.
+    env: {
+      MCP_DEV_BEARER_TOKEN: "test-dev-token",
+      MCP_MRTR_SECRET: "test-mrtr-secret-at-least-32-chars-long",
+    },
   },
 });

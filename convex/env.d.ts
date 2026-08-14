@@ -11,5 +11,6 @@ declare const process: {
     MCP_RESOURCE_URL?: string;
     MCP_DEV_BEARER_TOKEN?: string;
     MCP_ALLOWED_ORIGINS?: string;
+    MCP_MRTR_SECRET?: string;
   };
 };

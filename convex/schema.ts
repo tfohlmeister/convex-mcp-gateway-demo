@@ -16,4 +16,18 @@ export default defineSchema({
     .index("by_title", ["title"])
     // Backs `notes.byAuthor`, the tool that demonstrates `x-mcp-header`.
     .index("by_author", ["author"]),
+
+  /**
+   * One row per completed purge, keyed by the confirmation's idempotency
+   * key. This is the point of the MRTR demo: the gateway hands the same
+   * key to every retry of one confirmed continuation, so `notes.purge`
+   * recognises a replay and reports the original outcome instead of
+   * deleting a second time. Without a record like this, "the client lost
+   * our response and asked again" is indistinguishable from "the user
+   * confirmed a second purge".
+   */
+  purges: defineTable({
+    key: v.string(),
+    deleted: v.number(),
+  }).index("by_key", ["key"]),
 });
