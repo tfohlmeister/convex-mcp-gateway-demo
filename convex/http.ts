@@ -1,7 +1,10 @@
 import {
+  declineRead,
   HandleMcpRequestOptions,
+  inputRequired,
   McpGateway,
   type McpAuthorizerHandler,
+  type McpBeforeResourceReadHandler,
   type McpIdentityResolver,
   type McpResourceAuthorizerHandler,
 } from "convex-mcp-gateway";
@@ -11,6 +14,50 @@ import { httpAction } from "./_generated/server.js";
 import { instructions, resources, resourceTemplates, tools } from "./mcp.js";
 
 const gateway = new McpGateway(components.mcpGateway);
+
+/**
+ * Multi-round-trip requests on `resources/read`, new in gateway 0.9.0.
+ * The tool-side equivalent is `notes_purge`'s `beforeCall`; this is the
+ * read-side counterpart, and it is **mount-level** rather than
+ * per-resource: a provider can serve many URIs and the gateway cannot
+ * know which one owns a URI without calling it, so the gate sits where
+ * the URI is known and nothing has run yet. Branch on `uri` inside.
+ *
+ * Returning `null` falls through to the ordinary read path, so every URI
+ * except the one gated below behaves exactly as before.
+ */
+const beforeResourceRead: McpBeforeResourceReadHandler = async (
+  _ctx,
+  { uri, inputResponses },
+) => {
+  if (uri !== "notes://export") return null;
+  const ask = () =>
+    inputRequired({
+      confirm: {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message: "Export every note as one document?",
+          requestedSchema: {
+            type: "object",
+            properties: { confirm: { type: "boolean" } },
+            required: ["confirm"],
+          },
+        },
+      },
+    });
+  if (inputResponses === undefined) return ask();
+  // `inputResponses` is client-controlled, so validate every field before
+  // acting on it. A malformed answer asks again rather than serving.
+  const confirm = inputResponses.confirm as
+    | { action?: string; content?: { confirm?: unknown } }
+    | undefined;
+  if (confirm === undefined) return ask();
+  if (confirm.action !== "accept" || confirm.content?.confirm !== true) {
+    return declineRead("Export was not confirmed");
+  }
+  return null;
+};
 
 // Upstream OIDC issuer + pre-registered client id, both env-driven so
 // this demo runs against any IdP. Examples:
@@ -190,6 +237,11 @@ const mcpHandler = httpAction(async (ctx, request) =>
     // confirm before deleting. Omitted when unconfigured, which makes
     // that tool fail closed instead of running unconfirmed.
     ...(MRTR_SECRET ? { mrtr: { secret: MRTR_SECRET } } : {}),
+    // Gates `notes://export` behind a confirmation round. Passed
+    // unconditionally: without `mrtr` above, a hook that asks for input
+    // fails the read closed rather than serving it with the gate
+    // skipped, which is the behaviour worth demonstrating.
+    beforeResourceRead,
     // Opt-in MCP Tasks, advertised in `server/discover` only because
     // this option is present. No `execute`, so the component's built-in
     // scheduled executor runs `notes_reindex` once after the request
@@ -198,6 +250,24 @@ const mcpHandler = httpAction(async (ctx, request) =>
     // Server-level guidance surfaced in the initialize result, so the
     // model learns the auth model without reading every description.
     initializeInstructions: instructions,
+    // The spec's full `Implementation`, new in gateway 0.9.0. Replacing
+    // this block replaces it whole, so `name` and `version` are restated
+    // even though only the display fields are the point here.
+    //
+    // `icons` deliberately carries no `sizes`. The array form is what the
+    // spec mandates, but SDK builds 1.18.0 through 1.18.2 typed it as a
+    // bare string and fail their parse of the entire `InitializeResult`
+    // over it, which costs the connection rather than one icon. This
+    // block also repeats on every stateless result, so an `https:` src
+    // beats inlining a `data:` URI here.
+    serverInfo: {
+      name: "convex-mcp-gateway-playground",
+      version: "0.9.0",
+      title: "Notes Playground",
+      description: "A small notes store exposed over MCP.",
+      websiteUrl: "https://github.com/tfohlmeister/convex-mcp-gateway",
+      icons: [{ src: "https://example.com/icons/notes.png", mimeType: "image/png" }],
+    },
   } satisfies HandleMcpRequestOptions),
 );
 // Mount both /mcp/ and /mcp, because claude.ai strips the trailing slash

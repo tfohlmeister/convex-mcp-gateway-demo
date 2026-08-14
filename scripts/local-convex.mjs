@@ -10,8 +10,10 @@
  * Responsibilities:
  *  1. Lazy-install the pinned `convex-local-backend` binary on first run.
  *  2. Resolve repo-local ports (env: MCP_CONVEX_PORT / MCP_CONVEX_SITE_PORT,
- *     defaults 3310 / 3311). Different from MasterEV's 3210/3211 so both can
- *     run in parallel.
+ *     defaults 3320 / 3321). Distinct from MasterEV's 3210/3211 and from the
+ *     gateway repo's 3310/3311, because a self-hosted backend hosts exactly
+ *     one deployment: sharing a port pair means whichever repo ran
+ *     `convex dev` last silently displaces the other.
  *  3. Pre-flight port check.
  *  4. Write `.env.local` with `CONVEX_SELF_HOSTED_URL` /
  *     `CONVEX_SELF_HOSTED_ADMIN_KEY` so subsequent `convex` CLI commands
@@ -42,8 +44,8 @@ const INSTANCE_SECRET =
 const ADMIN_KEY =
   "0135d8598650f8f5cb0f30c34ec2e2bb62793bc28717c8eb6fb577996d50be5f4281b59181095065c5d0f86a2c31ddbe9b597ec62b47ded69782cd";
 
-const PORT = parseInt(process.env.MCP_CONVEX_PORT || "3310", 10);
-const SITE_PORT = parseInt(process.env.MCP_CONVEX_SITE_PORT || "3311", 10);
+const PORT = parseInt(process.env.MCP_CONVEX_PORT || "3320", 10);
+const SITE_PORT = parseInt(process.env.MCP_CONVEX_SITE_PORT || "3321", 10);
 
 const DATA_DIR = resolve(REPO_ROOT, ".convex-local");
 const DB_PATH = resolve(DATA_DIR, "db.sqlite3");

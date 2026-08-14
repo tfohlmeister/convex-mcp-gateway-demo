@@ -80,13 +80,38 @@ which is what keeps one catalog serving both protocol eras.
 Read-only content alongside the tools, also declared in
 `convex/mcp.ts`. Both require an authenticated caller.
 
-| URI           | Kind     | Access             |
-| ------------- | -------- | ------------------ |
-| `notes://all` | concrete | any authenticated caller |
-| `note://{id}` | RFC 6570 template | role `admin` |
+| URI              | Kind     | Access             |
+| ---------------- | -------- | ------------------ |
+| `notes://all`    | concrete | any authenticated caller |
+| `notes://export` | concrete | any authenticated caller, **after confirmation** |
+| `note://{id}`    | RFC 6570 template | role `admin` |
 
 Resource reads are audited (`auditResources: { read: true }`): URI,
 operation, identity and outcome are recorded, never the contents.
+
+`notes://all` and `note://{id}` carry `icons`, advertised verbatim in
+`resources/list` and `resources/templates/list`. The gateway never
+fetches one; a client decides whether to display it.
+
+### Confirmation before a read (MRTR on `resources/read`)
+
+The read-side counterpart of `notes_purge`. `notes://export` serves every
+note as one document, so the mount-level `beforeResourceRead` hook in
+`convex/http.ts` holds the read back for a confirmation round first:
+
+1. The first read answers `resultType: "input_required"` with a sealed
+   `requestState` and an `elicitation/create` request. No content.
+2. An accepted continuation falls through to the ordinary read path and
+   the provider serves the export.
+3. A decline refuses with `-32003`, and the provider never runs.
+
+The hook is **mount-level**, not per-resource: one provider can serve
+many URIs and the gateway cannot tell which owns a URI without calling
+it, so the gate sits where the URI is known and nothing has run yet.
+Every other URI returns `null` from the hook and reads in one round.
+
+Without `MCP_MRTR_SECRET` the read fails closed rather than serving the
+export ungated, the same direction of failure `notes_purge` has.
 
 ### Authorization
 
@@ -128,7 +153,7 @@ Walk `convex/` and `src/`. Nothing more to set up.
 ```sh
 pnpm install
 pnpm local:start          # downloads pinned convex-local-backend binary
-                          # writes .env.local, runs on :3310 / :3311
+                          # writes .env.local, runs on :3320 / :3321
 pnpm convex:dev           # codegen + push functions to local backend
 pnpm local:devtoken       # optional, see "Trying the auth-gated parts"
 pnpm local:mrtrsecret     # optional, needed for notes_purge's confirmation
@@ -145,7 +170,7 @@ Drive the MCP endpoint directly with the official Inspector:
 
 ```sh
 npx -y @modelcontextprotocol/inspector --cli \
-  http://127.0.0.1:3311/mcp/ --transport http --method tools/list
+  http://127.0.0.1:3321/mcp/ --transport http --method tools/list
 ```
 
 This lists the public tools only (no Bearer = anonymous). The
@@ -166,7 +191,7 @@ deployment, which switches on two hard-coded identities:
 
 ```sh
 npx -y @modelcontextprotocol/inspector --cli \
-  http://127.0.0.1:3311/mcp/ --transport http --method tools/list \
+  http://127.0.0.1:3321/mcp/ --transport http --method tools/list \
   --header "Authorization: Bearer local-dev-token"
 ```
 
@@ -202,7 +227,7 @@ carries its own protocol version and client capabilities in
 Start with `server/discover` instead of `initialize`:
 
 ```sh
-curl -sS -X POST http://127.0.0.1:3311/mcp/ \
+curl -sS -X POST http://127.0.0.1:3321/mcp/ \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -H 'mcp-protocol-version: 2026-07-28' \
@@ -246,7 +271,7 @@ BODY='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
         "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
                  "io.modelcontextprotocol/clientCapabilities":{}}}}'
 
-curl -sS -X POST http://127.0.0.1:3311/mcp/ \
+curl -sS -X POST http://127.0.0.1:3321/mcp/ \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -H 'authorization: Bearer local-dev-token' \

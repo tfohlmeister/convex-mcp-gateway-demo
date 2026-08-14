@@ -64,7 +64,7 @@ jobs:
           # that throw. The build still exits 0, so without a value here
           # this step proves nothing about the app. Any syntactically
           # valid URL does: nothing connects at build time.
-          VITE_CONVEX_URL: http://127.0.0.1:3310
+          VITE_CONVEX_URL: http://127.0.0.1:3320
 
       - name: Assert the app actually got bundled
         run: |
