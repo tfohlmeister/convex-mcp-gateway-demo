@@ -710,6 +710,27 @@ describe("resources", () => {
         description: "Every note in the store, as JSON.",
         mimeType: "application/json",
         annotations: { audience: ["assistant"], priority: 0.5 },
+        icons: [
+          {
+            src: "https://example.com/icons/notes-48.png",
+            mimeType: "image/png",
+            sizes: ["48x48"],
+          },
+          {
+            src: "https://example.com/icons/notes-dark.svg",
+            mimeType: "image/svg+xml",
+            sizes: ["any"],
+            theme: "dark",
+          },
+        ],
+      },
+      {
+        uri: "notes://export",
+        name: "notes-export",
+        title: "Bulk export",
+        description:
+          "Every note as one flat text export. Asks for confirmation first.",
+        mimeType: "text/plain",
       },
     ]);
   });
@@ -730,6 +751,7 @@ describe("resources", () => {
         title: "Note by id",
         description: "Read a single note by its id.",
         mimeType: "application/json",
+        icons: [{ src: "https://example.com/icons/note.png", sizes: ["96x96"] }],
       },
     ]);
   });
@@ -1555,5 +1577,94 @@ describe("$ref and composition on notes_search", () => {
 
     const found = JSON.parse(body.result!.content[0]!.text) as { body: string }[];
     expect(found.map((n) => n.body)).toEqual(["milk"]);
+  });
+});
+
+// =================================================================
+// MRTR on `resources/read`, new in gateway 0.9.0. The tool-side
+// counterpart is `notes_purge` above; this is the read side, gated by
+// the mount-level `beforeResourceRead` hook in http.ts. What matters is
+// that the provider does not run until an answer arrives, so the
+// assertions look at the served content, not only at the envelope.
+// =================================================================
+
+type ReadEnvelope = Envelope<{
+  resultType?: string;
+  requestState?: string;
+  inputRequests?: Record<string, unknown>;
+  contents?: { uri: string; text: string }[];
+}>;
+
+/** A `notes://export` read: first round, or a continuation. */
+async function readExport(
+  t: Harness,
+  params: Record<string, unknown> = {},
+): Promise<ReadEnvelope> {
+  const res = await modern(
+    t,
+    "resources/read",
+    { uri: "notes://export", ...params },
+    ADMIN,
+    ELICITING,
+  );
+  return (await res.json()) as ReadEnvelope;
+}
+
+describe("MRTR confirmation on the notes://export read", () => {
+  test("the first read asks instead of serving", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    const asked = await readExport(t);
+
+    expect(asked.result?.resultType).toBe("input_required");
+    expect(asked.result?.requestState).toBeTruthy();
+    expect(Object.keys(asked.result?.inputRequests ?? {})).toEqual(["confirm"]);
+    // The point of the gate: no content came back with the question.
+    expect(asked.result?.contents).toBeUndefined();
+  });
+
+  test("an accepted continuation serves the export", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+    const asked = await readExport(t);
+
+    const served = await readExport(t, {
+      requestState: asked.result!.requestState,
+      inputResponses: { confirm: { action: "accept", content: { confirm: true } } },
+    });
+
+    expect(served.result?.resultType).not.toBe("input_required");
+    expect(served.result?.contents?.[0]?.uri).toBe("notes://export");
+    expect(served.result?.contents?.[0]?.text).toContain("note 0");
+  });
+
+  test("a decline refuses the read rather than serving it", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+    const asked = await readExport(t);
+
+    const declined = await readExport(t, {
+      requestState: asked.result!.requestState,
+      inputResponses: { confirm: { action: "decline" } },
+    });
+
+    expect(declined.error?.code).toBe(-32003);
+    expect(declined.error?.message).toBe("Export was not confirmed");
+    expect(declined.result).toBeUndefined();
+  });
+
+  test("an ungated resource is untouched by the hook", async () => {
+    // The hook returns null for every other URI, so `notes://all` still
+    // reads in one round. Without this, a hook that accidentally gated
+    // everything would look exactly like a passing suite.
+    const t = newTest();
+    await seedNotes(t, 1);
+
+    const res = await modern(t, "resources/read", { uri: "notes://all" }, ADMIN);
+    const body = (await res.json()) as ReadEnvelope;
+
+    expect(body.result?.resultType).not.toBe("input_required");
+    expect(body.result?.contents?.[0]?.uri).toBe("notes://all");
   });
 });

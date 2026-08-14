@@ -419,10 +419,52 @@ export const resources: McpResourceRegistration[] = [
     description: "Every note in the store, as JSON.",
     mimeType: "application/json",
     annotations: { audience: ["assistant"], priority: 0.5 },
+    // Advertised verbatim in `resources/list`. The gateway never fetches
+    // an icon; the spec leaves the cross-domain and SVG precautions to
+    // the client that decides to display it.
+    icons: [
+      {
+        src: "https://example.com/icons/notes-48.png",
+        mimeType: "image/png",
+        sizes: ["48x48"],
+      },
+      {
+        src: "https://example.com/icons/notes-dark.svg",
+        mimeType: "image/svg+xml",
+        sizes: ["any"],
+        theme: "dark",
+      },
+    ],
     read: async (ctx, { uri }) => {
       const notes = await ctx.runQuery(api.notes.list, {});
       return [
         { uri, mimeType: "application/json", text: JSON.stringify(notes) },
+      ];
+    },
+  }),
+  defineMcpResource({
+    uri: "notes://export",
+    name: "notes-export",
+    title: "Bulk export",
+    description:
+      "Every note as one flat text export. Asks for confirmation first.",
+    mimeType: "text/plain",
+    // The read itself is ordinary. What makes this resource interesting
+    // is the mount-level `beforeResourceRead` hook in http.ts, which
+    // holds the read back for a confirmation round before this ever runs
+    // (gateway 0.9.0). The provider stays MCP-unaware, exactly as the
+    // Convex functions behind an MRTR-gated tool do.
+    read: async (ctx, { uri }) => {
+      const notes = (await ctx.runQuery(api.notes.list, {})) as Array<{
+        title: string;
+        body: string;
+      }>;
+      return [
+        {
+          uri,
+          mimeType: "text/plain",
+          text: notes.map((n) => `# ${n.title}\n${n.body}`).join("\n\n"),
+        },
       ];
     },
   }),
@@ -442,6 +484,9 @@ export const resourceTemplates: McpResourceTemplateProvider[] = [
     title: "Note by id",
     description: "Read a single note by its id.",
     mimeType: "application/json",
+    // Persisted with the template row, unlike a concrete resource's, so
+    // a registry-only template still lists its full descriptor.
+    icons: [{ src: "https://example.com/icons/note.png", sizes: ["96x96"] }],
     read: async (ctx, { uri, params }) => {
       const note = await ctx.runQuery(api.notes.get, { id: params.id });
       // null means "no such resource": the gateway turns it into the
