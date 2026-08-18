@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       convex:
-        specifier: ^1.43.0
-        version: 1.43.0(react@19.2.8)
+        specifier: ^1.44.0
+        version: 1.44.0(react@19.2.8)
       convex-mcp-gateway:
-        specifier: ^0.9.0
-        version: 0.9.0(convex@1.43.0(react@19.2.8))
+        specifier: ^0.10.0
+        version: 0.10.0(convex@1.44.0(react@19.2.8))
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -35,7 +35,7 @@ importers:
         version: 6.0.5(vite@8.2.1(esbuild@0.27.0))
       convex-test:
         specifier: ^0.0.55
-        version: 0.0.55(convex@1.43.0(react@19.2.8))
+        version: 0.0.55(convex@1.44.0(react@19.2.8))
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
@@ -504,8 +504,8 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  convex-mcp-gateway@0.9.0:
-    resolution: {integrity: sha512-lqNwyZ8EPlXLHLXULR1clQdSdNeO/73U9xws8dbiwKpBORgWHwU+22GdFuLbNpRsnlC5JaehxY7yIRPC7RShsA==}
+  convex-mcp-gateway@0.10.0:
+    resolution: {integrity: sha512-Eclv9AsOC4ON6z7ZD7QWrssTXngBIFZI/lFydr515XSsO74qIitm2tjmG3orLDhZTF7X80ft5Y+3TAuEKWsmoQ==}
     peerDependencies:
       convex: ^1.35.0
 
@@ -514,8 +514,8 @@ packages:
     peerDependencies:
       convex: ^1.43.0
 
-  convex@1.43.0:
-    resolution: {integrity: sha512-huZWEUZQYxIRG104o22ZI99HkviSEVltwezZRDi+pQDPrQbc5EoCPa4Y7pJDqUBQw9dc/iEEXj2/rLZg1j7Dww==}
+  convex@1.44.0:
+    resolution: {integrity: sha512-84bBa1ufSX4qohXdycXuQl2c2kAmfVpTCpypcmIgxpS5rUBgv5qjhArYugTkJVbljMs5SH2mW30bjJo+SQwe1w==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -669,8 +669,8 @@ packages:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
     engines: {node: ^10 || ^12 || >=14}
 
-  prettier@3.8.3:
-    resolution: {integrity: sha512-7igPTM53cGHMW8xWuVTydi2KO233VFiTNyF5hLJqpilHfmn8C8gPf+PS7dUT64YcXFbiMGZxS9pCSxL/Dxm/Jw==}
+  prettier@3.9.6:
+    resolution: {integrity: sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==}
     engines: {node: '>=14'}
     hasBin: true
 
@@ -1090,18 +1090,18 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-mcp-gateway@0.9.0(convex@1.43.0(react@19.2.8)):
+  convex-mcp-gateway@0.10.0(convex@1.44.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.8)
+      convex: 1.44.0(react@19.2.8)
 
-  convex-test@0.0.55(convex@1.43.0(react@19.2.8)):
+  convex-test@0.0.55(convex@1.44.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.8)
+      convex: 1.44.0(react@19.2.8)
 
-  convex@1.43.0(react@19.2.8):
+  convex@1.44.0(react@19.2.8):
     dependencies:
       esbuild: 0.27.0
-      prettier: 3.8.3
+      prettier: 3.9.6
       ws: 8.21.0
     optionalDependencies:
       react: 19.2.8
@@ -1226,7 +1226,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  prettier@3.8.3: {}
+  prettier@3.9.6: {}
 
   react-dom@19.2.8(react@19.2.8):
     dependencies:
