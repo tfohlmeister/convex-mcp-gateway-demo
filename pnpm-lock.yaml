@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       convex:
-        specifier: ^1.43.0
-        version: 1.43.0(react@19.2.8)
+        specifier: ^1.45.0
+        version: 1.45.0(react@19.2.8)
       convex-mcp-gateway:
-        specifier: ^0.9.0
-        version: 0.9.0(convex@1.43.0(react@19.2.8))
+        specifier: ^2.0.0
+        version: 2.0.0(convex@1.45.0(react@19.2.8))
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -35,7 +35,7 @@ importers:
         version: 6.0.5(vite@8.2.1(esbuild@0.27.0))
       convex-test:
         specifier: ^0.0.55
-        version: 0.0.55(convex@1.43.0(react@19.2.8))
+        version: 0.0.55(convex@1.45.0(react@19.2.8))
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
@@ -504,8 +504,8 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  convex-mcp-gateway@0.9.0:
-    resolution: {integrity: sha512-lqNwyZ8EPlXLHLXULR1clQdSdNeO/73U9xws8dbiwKpBORgWHwU+22GdFuLbNpRsnlC5JaehxY7yIRPC7RShsA==}
+  convex-mcp-gateway@2.0.0:
+    resolution: {integrity: sha512-Kb+4Gjeij5CVY/OsGxsDCZKThjUCQ8Xbyg1FzJU63oP1CbPNtsdqn/7O0IYoChoziZYXF9QA1jhJCFnjdxrVrw==}
     peerDependencies:
       convex: ^1.35.0
 
@@ -514,9 +514,9 @@ packages:
     peerDependencies:
       convex: ^1.43.0
 
-  convex@1.43.0:
-    resolution: {integrity: sha512-huZWEUZQYxIRG104o22ZI99HkviSEVltwezZRDi+pQDPrQbc5EoCPa4Y7pJDqUBQw9dc/iEEXj2/rLZg1j7Dww==}
-    engines: {node: '>=18.0.0', npm: '>=7.0.0'}
+  convex@1.45.0:
+    resolution: {integrity: sha512-AV3B56Ptu/14d76g3urBJ50dwpiZa6uJaLT84OWox5aCwZIJiuAamdjv3lLHDzs8vv5kC31anEZohhUe3qJ2bA==}
+    engines: {node: '>=20.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
       '@auth0/auth0-react': ^2.0.1
@@ -1090,15 +1090,15 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-mcp-gateway@0.9.0(convex@1.43.0(react@19.2.8)):
+  convex-mcp-gateway@2.0.0(convex@1.45.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.8)
+      convex: 1.45.0(react@19.2.8)
 
-  convex-test@0.0.55(convex@1.43.0(react@19.2.8)):
+  convex-test@0.0.55(convex@1.45.0(react@19.2.8)):
     dependencies:
-      convex: 1.43.0(react@19.2.8)
+      convex: 1.45.0(react@19.2.8)
 
-  convex@1.43.0(react@19.2.8):
+  convex@1.45.0(react@19.2.8):
     dependencies:
       esbuild: 0.27.0
       prettier: 3.8.3

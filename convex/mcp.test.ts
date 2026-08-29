@@ -255,7 +255,7 @@ describe("initialize", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
     });
     const body = (await listed.json()) as { result: { tools: ToolEntry[] } };
-    expect(body.result.tools).toHaveLength(10);
+    expect(body.result.tools).toHaveLength(11);
   });
 
   test("returns the instructions declared in convex/mcp.ts", async () => {
@@ -311,6 +311,7 @@ describe("tools/list per identity", () => {
   test("dev-user (admin) sees the whole catalog", async () => {
     const t = newTest();
     expect(await toolNames(t, ADMIN)).toEqual([
+      "notes_bulkTag",
       "notes_by_author",
       "notes_count",
       "notes_create",
@@ -732,6 +733,14 @@ describe("resources", () => {
           "Every note as one flat text export. Asks for confirmation first.",
         mimeType: "text/plain",
       },
+      {
+        uri: "notes://stats",
+        name: "notes-stats",
+        title: "Store statistics",
+        description: "How many notes exist. Readable without a token.",
+        mimeType: "application/json",
+        annotations: { audience: ["assistant"], priority: 0.2 },
+      },
     ]);
   });
 
@@ -953,6 +962,18 @@ async function modern(
   // has to declare elicitation the way a real client does.
   capabilities: Record<string, unknown> = {},
 ): Promise<Response> {
+  return await modernAt(t, "/mcp/", method, params, headers, capabilities);
+}
+
+/** `modern`, against a named mount. Only `/mcp-public/` needs it. */
+async function modernAt(
+  t: Harness,
+  path: string,
+  method: string,
+  params: Record<string, unknown> = {},
+  headers: AuthHeaders = ANON,
+  capabilities: Record<string, unknown> = {},
+): Promise<Response> {
   // 2026-07-28 mirrors the request's "subject" into Mcp-Name, and which
   // field that is depends on the method: the tool for a call, the URI
   // for a read, the task id for a poll. A mismatch is -32020 before
@@ -960,11 +981,13 @@ async function modern(
   const subject =
     method === "resources/read"
       ? params.uri
-      : method === "tasks/get" || method === "tasks/update"
+      : method === "tasks/get" ||
+          method === "tasks/update" ||
+          method === "tasks/cancel"
         ? params.taskId
         : params.name;
   const name = typeof subject === "string" ? subject : undefined;
-  return await t.fetch("/mcp/", {
+  return await t.fetch(path, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -1245,6 +1268,16 @@ async function seedNotes(t: Harness, count: number) {
 const noteCount = (t: Harness) =>
   t.run(async (ctx) => (await ctx.db.query("notes").collect()).length);
 
+/**
+ * The tags on every note, in insertion order. Reading the database
+ * rather than the tool's own report is what proves a deferred call
+ * actually ran, or, for the refusal paths, that it did not.
+ */
+const tagsOf = (t: Harness) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query("notes").collect()).map((note) => note.tags ?? []),
+  );
+
 /** A `notes_purge` call: first round, or a continuation. */
 async function purge(
   t: Harness,
@@ -1402,127 +1435,336 @@ describe("MRTR confirmation on notes_purge", () => {
 });
 
 // =================================================================
-// MCP Tasks on notes_reindex. The mount passes `tasks: {}`, so the
-// component's built-in scheduled executor runs the tool after the HTTP
-// request returns; the tests drive the scheduler explicitly.
+// MCP Tasks, on the shipped SEP-2663 wire (gateway 2.0.0).
+//
+// Both levels are in the catalog: `notes_reindex` is `"optional"`, so the
+// mount's `shouldCreate` decides per call, and `notes_bulkTag` is
+// `"required"`, so it never answers inline. The mount passes no
+// `execute`, so the component's built-in scheduled executor runs the tool
+// after the HTTP request returns; the tests drive the scheduler
+// explicitly.
 // =================================================================
 
 /**
- * A client that can poll tasks. Note the key is the namespaced one,
- * unlike `elicitation` above: the gateway refuses a task-augmented call
- * from a client that did not declare it, so a client which cannot poll
- * never gets a handle it would abandon.
+ * A client that can poll tasks.
+ *
+ * The key sits under `extensions`, which is where SEP-2663 put it. A
+ * client that declares it anywhere else has not opted in, and the
+ * gateway treats it as one that cannot poll: `notes_reindex` answers
+ * inline, `notes_bulkTag` answers -32021.
  */
-const TASKING = { "io.modelcontextprotocol/tasks": {} };
+const TASKING = { extensions: { "io.modelcontextprotocol/tasks": {} } };
 
+/**
+ * The flat SEP-2663 shapes, in one loose type.
+ *
+ * `tools/call` answers `resultType: "task"` with the handle's fields
+ * beside it, and `tasks/get` answers `resultType: "complete"` with the
+ * descriptor's. Neither nests a `task` object any more, which is the
+ * 2.0.0 wire change a client notices first.
+ */
 type TaskEnvelope = Envelope<{
-  task?: { taskId: string; status: string };
+  resultType?: string;
+  taskId?: string;
+  status?: string;
+  createdAt?: string;
+  lastUpdatedAt?: string;
+  ttlMs?: number;
+  pollIntervalMs?: number;
+  task?: unknown;
+  result?: {
+    content?: { type: string; text: string }[];
+    structuredContent?: Record<string, number>;
+    isError?: boolean;
+  };
+  error?: { code: number; message: string };
   content?: { type: string; text: string }[];
-  structuredContent?: { scanned: number; authors: { author: string; notes: number }[] };
+  structuredContent?: { scanned?: number; tagged?: number };
 }>;
 
-describe("MCP tasks on notes_reindex", () => {
-  test("a task call returns a handle and runs after the request", async () => {
+describe('MCP tasks: the "required" level on notes_bulkTag', () => {
+  test("the call defers, and the built-in executor finishes it", async () => {
     vi.useFakeTimers();
     try {
       const t = newTest();
-      await seedNotes(t, 4);
+      await seedNotes(t, 3);
 
       const res = await modern(
         t,
         "tools/call",
-        { name: "notes_reindex", arguments: {}, task: {} },
+        { name: "notes_bulkTag", arguments: { tag: "reviewed" } },
         ADMIN,
         TASKING,
       );
       expect(res.status).toBe(200);
       const created = (await res.json()) as TaskEnvelope;
-      const taskId = created.result?.task?.taskId;
+
+      // The flat handle. `task` is gone as a nesting level, and the
+      // timestamps are ISO-8601 strings rather than milliseconds.
+      expect(created.result?.resultType).toBe("task");
+      expect(created.result?.task).toBeUndefined();
+      const taskId = created.result?.taskId;
       expect(taskId).toBeTruthy();
-      // Not done yet: the executor is scheduled, not inline.
-      expect(created.result?.task?.status).toBe("working");
+      expect(created.result?.status).toBe("working");
+      expect(created.result?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(created.result?.lastUpdatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      // Remaining lifetime, not an absolute expiry: a client polling
+      // twice is told how much longer it may keep going.
+      expect(created.result?.ttlMs).toBeGreaterThan(0);
+      expect(created.result?.pollIntervalMs).toBeGreaterThan(0);
+      // Nothing has run yet. The executor is scheduled, not inline.
+      expect(await tagsOf(t)).toEqual([[], [], []]);
 
       await t.finishAllScheduledFunctions(vi.runAllTimers);
 
-      const polled = await modern(
-        t,
-        "tasks/get",
-        { taskId },
-        ADMIN,
-        TASKING,
-      );
+      const polled = await modern(t, "tasks/get", { taskId }, ADMIN, TASKING);
       const body = (await polled.json()) as TaskEnvelope;
-      expect(body.result?.task?.status).toBe("completed");
+      // A poll is `complete`; only a call that CREATES a task carries the
+      // `task` discriminator.
+      expect(body.result?.resultType).toBe("complete");
+      expect(body.result?.status).toBe("completed");
+      // The result is the CallToolResult the same call would have
+      // returned synchronously, `structuredContent` included, because
+      // this tool declares a `returns` validator.
+      expect(body.result?.result?.structuredContent).toEqual({
+        tagged: 3,
+        alreadyTagged: 0,
+      });
+      expect(body.result?.result?.isError).toBe(false);
+      expect(await tagsOf(t)).toEqual([
+        ["reviewed"],
+        ["reviewed"],
+        ["reviewed"],
+      ]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  test("the same tool called synchronously needs no task at all", async () => {
+  test("a client that cannot poll is told what to declare", async () => {
     const t = newTest();
     await seedNotes(t, 2);
 
-    // One catalog, both shapes: a client that cannot poll just gets the
-    // answer, which is what keeps legacy clients working.
+    // Same caller, same tool, no tasks extension. The tool has no
+    // synchronous answer to give, so the gateway refuses rather than
+    // running the work and handing back a result nobody asked for.
+    const res = await modern(t, "tools/call", {
+      name: "notes_bulkTag",
+      arguments: { tag: "reviewed" },
+    }, ADMIN);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Envelope<never> & {
+      error?: { data?: { requiredCapabilities?: Record<string, unknown> } };
+    };
+    expect(body.error?.code).toBe(-32021);
+    // The error names exactly what to add, so a client can fix itself.
+    expect(body.error?.data?.requiredCapabilities).toEqual({
+      extensions: { "io.modelcontextprotocol/tasks": {} },
+    });
+    // And nothing ran.
+    expect(await tagsOf(t)).toEqual([[], []]);
+  });
+
+  test("the session era has no tasks, so the tool refuses there too", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    const body = await callTool(t, ADMIN, "notes_bulkTag", {
+      tag: "reviewed",
+    });
+
+    // -32602 naming the revision it would need. A legacy client cannot
+    // poll at all, so there is nothing to hand it.
+    expect(body.error?.code).toBe(-32602);
+    expect(body.error?.message).toContain("2026-07-28");
+    expect(await tagsOf(t)).toEqual([[], []]);
+  });
+
+  test("a cancelled task stays cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = newTest();
+      await seedNotes(t, 2);
+
+      const created = (await (
+        await modern(
+          t,
+          "tools/call",
+          { name: "notes_bulkTag", arguments: { tag: "reviewed" } },
+          ADMIN,
+          TASKING,
+        )
+      ).json()) as TaskEnvelope;
+      const taskId = created.result?.taskId;
+
+      const cancelled = (await (
+        await modern(t, "tasks/cancel", { taskId }, ADMIN, TASKING)
+      ).json()) as TaskEnvelope;
+      // An empty ack, not the task. The status it settled to is read
+      // from the next `tasks/get`.
+      expect(cancelled.error).toBeUndefined();
+      expect(cancelled.result?.resultType).toBe("complete");
+      expect(cancelled.result?.status).toBeUndefined();
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const polled = (await (
+        await modern(t, "tasks/get", { taskId }, ADMIN, TASKING)
+      ).json()) as TaskEnvelope;
+      // Terminal states never change, so the scheduled executor firing
+      // afterwards cannot resurrect it.
+      expect(polled.result?.status).toBe("cancelled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MCP tasks: the "optional" level on notes_reindex', () => {
+  test("shouldCreate keeps a small store inline", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    // The client CAN poll and the tool IS task-capable. The mount's
+    // `shouldCreate` still answers inline, because two notes are not
+    // worth a round trip. That decision lives in the host: the gateway
+    // knows the tool defers, not whether this call is slow.
     const res = await modern(
       t,
       "tools/call",
       { name: "notes_reindex", arguments: {} },
       ADMIN,
-    );
-    const body = (await res.json()) as TaskEnvelope;
-
-    expect(body.result?.task).toBeUndefined();
-    expect(body.result?.structuredContent?.scanned).toBe(2);
-  });
-
-  test("a tool without taskSupport refuses a task request", async () => {
-    const t = newTest();
-    // Opting in is per tool, not per mount: `notes_list` never declared
-    // it, so asking for a task must not silently run it synchronously.
-    const res = await modern(
-      t,
-      "tools/call",
-      { name: "notes_list", arguments: {}, task: {} },
-      ADMIN,
       TASKING,
     );
     const body = (await res.json()) as TaskEnvelope;
 
-    expect(body.error).toBeDefined();
-    expect(body.result?.task).toBeUndefined();
+    expect(body.result?.resultType).not.toBe("task");
+    expect(body.result?.taskId).toBeUndefined();
+    expect(body.result?.structuredContent?.scanned).toBe(2);
+  });
+
+  test("shouldCreate defers once the store is big enough", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = newTest();
+      // Matches REINDEX_TASK_THRESHOLD in convex/http.ts.
+      await seedNotes(t, 25);
+
+      const created = (await (
+        await modern(
+          t,
+          "tools/call",
+          { name: "notes_reindex", arguments: {} },
+          ADMIN,
+          TASKING,
+        )
+      ).json()) as TaskEnvelope;
+      expect(created.result?.resultType).toBe("task");
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const polled = (await (
+        await modern(
+          t,
+          "tasks/get",
+          { taskId: created.result?.taskId },
+          ADMIN,
+          TASKING,
+        )
+      ).json()) as TaskEnvelope;
+      expect(polled.result?.status).toBe("completed");
+      expect(polled.result?.result?.structuredContent?.scanned).toBe(25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a client that never declared the extension just gets the answer", async () => {
+    const t = newTest();
+    await seedNotes(t, 30);
+
+    // Above the threshold, so `shouldCreate` would say "task". It is
+    // never asked: a task is only possible for a client that opted in,
+    // and an `"optional"` tool answers such a client inline instead of
+    // refusing. That is what keeps one catalog serving both eras.
+    const body = (await (
+      await modern(
+        t,
+        "tools/call",
+        { name: "notes_reindex", arguments: {} },
+        ADMIN,
+      )
+    ).json()) as TaskEnvelope;
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.resultType).not.toBe("task");
+    expect(body.result?.structuredContent?.scanned).toBe(30);
+  });
+
+  test("a legacy params.task hint is ignored, not refused", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    // Before SEP-2663 shipped, a client asked for a task per call. The
+    // field is now a legacy hint: `notes_list` is not task-capable, and
+    // the call runs normally instead of erroring.
+    const body = (await (
+      await modern(
+        t,
+        "tools/call",
+        { name: "notes_list", arguments: {}, task: {} },
+        ADMIN,
+        TASKING,
+      )
+    ).json()) as TaskEnvelope;
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.resultType).not.toBe("task");
+    expect(body.result?.content?.[0]?.type).toBe("text");
   });
 });
 
 // =================================================================
-// Bounded $ref and composition on notes_search.
+// JSON Schema pass-through on notes_search (SEP-1613, gateway 0.11.0).
 // =================================================================
 
-describe("$ref and composition on notes_search", () => {
-  test("the host writes $ref, the client receives it resolved", async () => {
+describe("authored JSON Schema on notes_search", () => {
+  test("the client receives the document the host wrote", async () => {
     const t = newTest();
     const res = await modern(t, "tools/list", {}, ADMIN);
     const body = (await res.json()) as Envelope<{
       tools: { name: string; inputSchema: Record<string, unknown> }[];
     }>;
     const tool = body.result!.tools.find((x) => x.name === "notes_search");
+    const advertised = tool!.inputSchema;
 
-    // This is what the bounded resolver buys: the host factors the
-    // condition out once, and every client gets a self-contained schema
-    // whether or not it can follow a `$ref`. Nothing dangles.
-    const advertised = JSON.stringify(tool!.inputSchema);
-    expect(advertised).not.toContain("$ref");
-    expect(advertised).not.toContain("$defs");
-    // Both anyOf branches carry the resolved condition, the second one
-    // nested inside `items`, which is where a shallow resolver stops.
-    const schema = tool!.inputSchema as {
-      properties: { filter: { anyOf: [Record<string, unknown>, Record<string, unknown>] } };
+    // The dialect declaration survives the registry. Convex reserves
+    // field names starting with `$`, so up to gateway 0.10.0 this single
+    // key failed the write from inside Convex and took the whole mount
+    // down, `initialize` included; the authored document is now stored
+    // JSON-encoded beside the gateway's own resolved view.
+    expect(advertised.$schema).toBe(
+      "https://json-schema.org/draft/2020-12/schema",
+    );
+    // References reach the client as written, rather than expanded. The
+    // resolved copy still exists gateway-side, where it bounds the work
+    // a hostile schema can cause and backs the `x-mcp-header` walk; a
+    // client just never sees it.
+    expect(advertised.$defs).toHaveProperty("condition.properties.field.enum", [
+      "title",
+      "body",
+    ]);
+    const schema = advertised as unknown as {
+      properties: {
+        filter: { anyOf: [Record<string, unknown>, Record<string, unknown>] };
+      };
     };
     const [single, conjunction] = schema.properties.filter.anyOf;
-    expect(single).toHaveProperty("properties.field.enum", ["title", "body"]);
+    expect(single).toEqual({ $ref: "#/$defs/condition" });
+    // The second branch references the same leaf from inside `items`.
     expect(conjunction).toHaveProperty(
-      "properties.all.items.properties.field.enum",
-      ["title", "body"],
+      "properties.all.items.$ref",
+      "#/$defs/condition",
     );
   });
 
@@ -1666,5 +1908,275 @@ describe("MRTR confirmation on the notes://export read", () => {
 
     expect(body.result?.resultType).not.toBe("input_required");
     expect(body.result?.contents?.[0]?.uri).toBe("notes://all");
+  });
+});
+
+// =================================================================
+// Anonymous resources on the /mcp-public/ mount (gateway 1.0.0).
+//
+// The option is per mount, not per resource: the same catalog is served
+// by both handlers, and only this one may answer a caller with no token.
+// =================================================================
+
+type PublicReadEnvelope = Envelope<{
+  contents?: { uri: string; text: string }[];
+}>;
+
+describe("anonymous resources on /mcp-public/", () => {
+  test("an anonymous list shows the one resource that allows it", async () => {
+    const t = newTest();
+    const res = await modernAt(t, "/mcp-public/", "resources/list");
+    const body = (await res.json()) as Envelope<{
+      resources: { uri: string }[];
+    }>;
+
+    // The authorizer is asked per candidate, so denying the rest is also
+    // what filters the listing.
+    expect(body.result?.resources.map((r) => r.uri)).toEqual([
+      "notes://stats",
+    ]);
+  });
+
+  test("an anonymous read gets content and a null caller", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+
+    const res = await modernAt(t, "/mcp-public/", "resources/read", {
+      uri: "notes://stats",
+    });
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    expect(JSON.parse(body.result!.contents![0]!.text)).toEqual({
+      total: 3,
+      // The nullable identity, reaching the read handler. A provider that
+      // dereferences it without narrowing breaks exactly here.
+      caller: null,
+    });
+  });
+
+  test("the same handler stamps a caller when there is one", async () => {
+    const t = newTest();
+    await seedNotes(t, 1);
+
+    const res = await modernAt(
+      t,
+      "/mcp-public/",
+      "resources/read",
+      { uri: "notes://stats" },
+      READER,
+    );
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    expect(JSON.parse(body.result!.contents![0]!.text)).toEqual({
+      total: 1,
+      caller: "dev-reader",
+    });
+  });
+
+  test("anonymous stops at the one allowed URI", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    const res = await modernAt(t, "/mcp-public/", "resources/read", {
+      uri: "notes://all",
+    });
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    // Note contents are not part of the anonymous surface, and the
+    // authorizer denies by default rather than by listing what to block.
+    expect(body.result?.contents).toBeUndefined();
+    // -32001, not the -32003 the export denial below gets: a caller with
+    // no token is told to authenticate, one that authenticated and still
+    // may not read is told it is forbidden.
+    expect(body.error?.code).toBe(-32001);
+  });
+
+  test("the gated export is refused here, not served ungated", async () => {
+    const t = newTest();
+    await seedNotes(t, 2);
+
+    // `anonymousResources` cannot be combined with `beforeResourceRead`,
+    // so this mount has no confirmation round. The resource is still in
+    // the shared catalog, and an admin token is enough to read it on
+    // /mcp/. Serving it here would be the gate silently disappearing.
+    const res = await modernAt(
+      t,
+      "/mcp-public/",
+      "resources/read",
+      { uri: "notes://export" },
+      ADMIN,
+    );
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    expect(body.result?.contents).toBeUndefined();
+    expect(body.error?.code).toBe(-32003);
+  });
+
+  test("a template is not part of the anonymous surface", async () => {
+    const t = newTest();
+    const id = await seedNote(t);
+
+    // A template expansion carries no registry metadata, so it cannot
+    // carry the `public` opt-in either, and the policy denies it.
+    const read = (await (
+      await modernAt(t, "/mcp-public/", "resources/read", {
+        uri: `note://${id}`,
+      })
+    ).json()) as PublicReadEnvelope;
+    expect(read.result?.contents).toBeUndefined();
+    expect(read.error?.code).toBe(-32001);
+
+    // Listing templates is refused rather than answered empty, and the
+    // difference is deliberate: an anonymous caller the policy granted
+    // NOTHING, for a reason that reads as "unauthorized", is challenged
+    // so a client whose token merely expired learns to re-authenticate.
+    // `resources/list` above is answered, not challenged, because that
+    // caller does get something.
+    const listed = (await (
+      await modernAt(t, "/mcp-public/", "resources/templates/list")
+    ).json()) as Envelope<{ resourceTemplates: unknown[] }>;
+    expect(listed.result).toBeUndefined();
+    expect(listed.error?.code).toBe(-32001);
+  });
+
+  test("the bare /mcp-public path is mounted too", async () => {
+    const t = newTest();
+    await seedNotes(t, 1);
+
+    // Clients strip the trailing slash before they POST, and Convex
+    // routes on the exact path. The main mount learned this the hard
+    // way; a second mount inherits the problem, not the fix.
+    const res = await modernAt(t, "/mcp-public", "resources/read", {
+      uri: "notes://stats",
+    });
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    expect(body.error).toBeUndefined();
+    expect(JSON.parse(body.result!.contents![0]!.text).total).toBe(1);
+  });
+
+  test("the main mount still refuses anonymous reads", async () => {
+    const t = newTest();
+    await seedNotes(t, 1);
+
+    // The regression guard for the option being mount-scoped: the same
+    // URI, the same caller, the other handler.
+    const res = await modern(t, "resources/read", { uri: "notes://stats" });
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    expect(body.result?.contents).toBeUndefined();
+    expect(body.error?.code).toBe(-32001);
+  });
+});
+
+// =================================================================
+// The MRTR fallback for clients that cannot elicit (gateway 0.11.0).
+//
+// Both hooks ask for a form. Without a fallback the gateway fails such a
+// call closed, which is safe but tells a client nothing; `onUnsupported`
+// completes it with an ordinary result instead. Neither path runs the
+// work.
+// =================================================================
+
+describe("clients that cannot answer an input request", () => {
+  test("notes_purge explains itself instead of failing closed", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+
+    // No `elicitation` in the declared capabilities.
+    const res = await modern(
+      t,
+      "tools/call",
+      { name: "notes_purge", arguments: {} },
+      ADMIN,
+    );
+    const body = (await res.json()) as Envelope<{
+      resultType?: string;
+      content?: { type: string; text: string }[];
+      isError?: boolean;
+    }>;
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.resultType).not.toBe("input_required");
+    expect(body.result?.content?.[0]?.text).toContain("Nothing was deleted");
+    // An error result, not a friendly note. This call did not do what it
+    // was asked, and on the session era below it never can.
+    expect(body.result?.isError).toBe(true);
+    // The whole point: a fallback completes the call BEFORE dispatch.
+    expect(await noteCount(t)).toBe(3);
+  });
+
+  test("a session-era client lands in the same fallback", async () => {
+    const t = newTest();
+    await seedNotes(t, 3);
+
+    // The trap worth pinning: this client DOES declare elicitation, at
+    // `initialize`. The gateway only reads per-request capabilities on
+    // 2026-07-28 and cannot vouch for a session-era one, so the hook's
+    // fallback substitutes for the protocol error this used to get.
+    // Which means `notes_purge` cannot run at all on this protocol, and
+    // the fallback has to say so rather than look like a success.
+    const session = await openSession(t, ADMIN);
+    const res = await rpc(
+      t,
+      session,
+      {
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: { name: "notes_purge", arguments: {} },
+      },
+      ADMIN,
+    );
+    const body = (await res.json()) as Envelope<{
+      content?: { text: string }[];
+      isError?: boolean;
+    }>;
+
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain("2026-07-28");
+    expect(await noteCount(t)).toBe(3);
+  });
+
+  test("the export falls back to titles, never bodies", async () => {
+    const t = newTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("notes", { title: "public title", body: "secret" });
+    });
+
+    const res = await modern(t, "resources/read", { uri: "notes://export" }, ADMIN);
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    const text = body.result!.contents![0]!.text;
+    expect(text).toContain("public title");
+    expect(text).toContain("titles only");
+    expect(text).not.toContain("secret");
+  });
+
+  test("the export fallback also catches session-era reads", async () => {
+    const t = newTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("notes", { title: "public title", body: "secret" });
+    });
+
+    // Same trigger as the purge above, on the read side. A session-era
+    // admin gets the redacted answer rather than the confirmation round.
+    const session = await openSession(t, ADMIN);
+    const res = await rpc(
+      t,
+      session,
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "resources/read",
+        params: { uri: "notes://export" },
+      },
+      ADMIN,
+    );
+    const body = (await res.json()) as PublicReadEnvelope;
+
+    const text = body.result!.contents![0]!.text;
+    expect(text).toContain("titles only");
+    expect(text).not.toContain("secret");
   });
 });

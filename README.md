@@ -9,7 +9,7 @@ a Convex-backed notes table is exposed as MCP tools, gated by an
 
 ### Tools
 
-Ten MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
+Eleven MCP tools declared in [`convex/mcp.ts`](./convex/mcp.ts) and handed
 to `handleMcpRequest({ tools })`. The gateway reconciles the registry on
 every `initialize` and before every stateless 2026-07-28 request, so
 editing the array takes effect on the next client connect. **There is no
@@ -25,8 +25,9 @@ registration step to run by hand.**
 | `notes_delete` | mutation | role `admin`  | mutation through the authorizer                |
 | `notes_by_author` | query | auth required | `x-mcp-header`: two arguments mirrored into `Mcp-Param-*` routing headers (see below) |
 | `notes_purge`  | mutation | role `admin`  | **MRTR + elicitation**: confirms before deleting, and replay-safe (see below) |
-| `notes_reindex` | mutation | role `admin` | **MCP Tasks**: a modern client may poll instead of waiting |
-| `notes_search` | query    | auth required | **bounded `$ref`**: a `$defs` schema the gateway resolves for the client |
+| `notes_reindex` | mutation | role `admin` | **MCP Tasks, `"optional"`**: the mount's `shouldCreate` decides per call whether to defer |
+| `notes_bulkTag` | mutation | role `admin` | **MCP Tasks, `"required"`**: never answers inline, refuses a client that cannot poll |
+| `notes_search` | query    | auth required | **authored JSON Schema**: `$schema`, `$defs` and `$ref` reach the client as written |
 
 `notes_by_author` takes the subject as an ordinary argument, so any
 authenticated caller can ask about any author. That exposes nothing extra
@@ -62,28 +63,85 @@ Requires `MCP_MRTR_SECRET`. Without it the tool **fails closed**: it
 refuses with `-32603` rather than running unconfirmed, which is the
 behaviour `convex/mrtr-unconfigured.test.ts` pins down.
 
+A client that cannot answer the round is a different case, and the hook
+handles it with an `onUnsupported` fallback: an ordinary result instead
+of a protocol error. A fallback **completes the call before dispatch**,
+so it is not a way around the gate; the mutation is just as un-run as
+after a decline.
+
+**Know what actually triggers it before you copy this.** The gateway
+reads per-request client capabilities on `2026-07-28` only, and treats a
+session-era call as one whose capabilities it cannot vouch for. So the
+fallback replaces the `-32601` that a 2025-era client used to get,
+*including* one that declared `elicitation` at `initialize`. That is why
+this fallback returns `isError: true` and names both requirements:
+`notes_purge` can never run on the session protocol, and reporting that
+as a successful call would turn it into a permanent silent no-op.
+
 ### Long-running calls (MCP Tasks)
 
-The mount passes `tasks: {}`, so a `2026-07-28` client that declares the
-`io.modelcontextprotocol/tasks` capability may send `tools/call` with a
-`task` request for `notes_reindex` and poll `tasks/get` for the result.
+A `2026-07-28` client declares the tasks extension once, in its
+capabilities, under `extensions`:
+
+```json
+{ "extensions": { "io.modelcontextprotocol/tasks": {} } }
+```
+
+and from then on handles whichever result arrives. SEP-2663 gives it no
+per-call say, so the **server** decides, and the two tools here show the
+two levels that decision comes in:
+
+- **`notes_reindex` is `"optional"`.** The mount passes a
+  `tasks.shouldCreate` (in `convex/http.ts`) that answers inline under 25
+  notes and hands back a task handle from 25 on. The gateway knows the tool
+  *can* defer; only the host knows whether *this* call is worth
+  deferring. Omit the callback and every eligible call becomes a task.
+- **`notes_bulkTag` is `"required"`.** It has no synchronous answer to
+  give, so it never runs inline. A client that did not declare the
+  extension is refused with `-32021` and a `data.requiredCapabilities`
+  naming exactly what to add; a session-era client is refused with
+  `-32602` naming the revision it would need; an anonymous caller is
+  challenged, because a task is owner-bound. Dispatching any of them
+  anyway would run the side effect the level exists to defer.
+
 Without `execute`, the component's built-in scheduled executor runs the
 tool once after the HTTP request returns: durable across restarts, and
 deliberately no retries, because a mutation that already committed must
 not run twice.
 
-The same tool called without a `task` request just returns its answer,
-which is what keeps one catalog serving both protocol eras.
+A task-creating `tools/call` answers a **flat** result, and `tasks/get`
+polls it:
+
+| Field | On `tools/call` | On `tasks/get` |
+| ----- | --------------- | -------------- |
+| `resultType` | `"task"` | `"complete"` |
+| `taskId`, `status` | yes | yes |
+| `createdAt`, `lastUpdatedAt` | ISO-8601 | ISO-8601 |
+| `ttlMs` | lifetime **left**, not an expiry | recounted per poll |
+| `result` / `error` | no | on a terminal status |
+
+`tasks/cancel` acknowledges with an empty `{ "resultType": "complete" }`
+and is idempotent; the status it settled to comes from the next
+`tasks/get`, and a terminal status never changes afterwards.
+
+A completed task's `result` is the same `CallToolResult` the tool would
+have returned synchronously, `structuredContent` included. The split
+worth knowing: a tool that *ran* and reported a problem is a **completed**
+task carrying `isError: true`, while `failed` means no result was ever
+produced, which includes a tool that crashed part-way and one an argument
+validator rejected before it started.
 
 ### Resources
 
 Read-only content alongside the tools, also declared in
-`convex/mcp.ts`. Both require an authenticated caller.
+`convex/mcp.ts`. On the main `/mcp/` mount every read needs an
+authenticated caller; the `/mcp-public/` mount below is the exception.
 
 | URI              | Kind     | Access             |
 | ---------------- | -------- | ------------------ |
 | `notes://all`    | concrete | any authenticated caller |
-| `notes://export` | concrete | any authenticated caller, **after confirmation** |
+| `notes://export` | concrete | role `admin`, **after confirmation** |
+| `notes://stats`  | concrete | any authenticated caller, and anonymously on `/mcp-public/` |
 | `note://{id}`    | RFC 6570 template | role `admin` |
 
 Resource reads are audited (`auditResources: { read: true }`): URI,
@@ -113,20 +171,110 @@ Every other URI returns `null` from the hook and reads in one round.
 Without `MCP_MRTR_SECRET` the read fails closed rather than serving the
 export ungated, the same direction of failure `notes_purge` has.
 
+A client that cannot answer the round gets the read's `onUnsupported`
+fallback: `completeRead` with the note **titles only**. That is the shape
+the fallback exists for, a redacted answer rather than a refusal, and the
+bodies stay behind the confirmation.
+
+The same trigger caveat applies, so every session-era read lands there
+too. What bounds the answer is who can reach it: this URI already
+requires the `admin` group, and an admin can read any single note through
+`note://{id}` anyway. A fallback must not hand out more than its caller
+could already reach.
+
+### Resources without a token (`/mcp-public/`)
+
+A second mount in `convex/http.ts`, and the only one that sets
+`anonymousResources: true`. It serves exactly one resource without a
+Bearer token:
+
+```sh
+curl -sS -X POST http://127.0.0.1:3321/mcp-public/ \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: resources/read' \
+  -H 'mcp-name: notes://stats' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{
+        "uri":"notes://stats","_meta":{
+        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+Five things about it are worth copying, and one is worth not copying:
+
+- **The identity a read handler receives is nullable.** `notes://stats`
+  narrows it (`identity?.subject ?? null`) and stamps the result either
+  way. A handler that reads `identity.subject` unconditionally compiles
+  fine against a mount without the option and breaks against this one.
+- **`resource_anonymous` is a fourth authorizer mode**, and the only one
+  whose `identity` is `null`. Both authorizers here handle it **first**
+  and deny by default, because the branches under it end in
+  `{ allowed: true }`.
+- **The opt-in is `metadata: { public: true }` on the registration**, the
+  same convention `authorize` uses for public tools, rather than a URI
+  list in the policy. A new resource is then private until its own
+  registration says otherwise, instead of until someone remembers to
+  update a second file.
+- **The gateway asks per candidate**, so that denial is also what filters
+  an anonymous `resources/list` down to this one entry. An anonymous
+  caller the policy grants *nothing* is challenged with `-32001` instead
+  of handed an empty result, so a client whose token merely expired
+  learns to re-authenticate. That is why `resources/templates/list` is
+  refused here while `resources/list` answers.
+- **Tools are unaffected.** `authorize` still applies, so this mount
+  serves one anonymous resource and one public tool, not an open door.
+- **What not to copy:** the two mounts must pass the *same* `tools`,
+  `resources` and `resourceTemplates` arrays. The component keeps a
+  single registry with a single catalog fingerprint, so two mounts
+  advertising different lists would each re-sync (and delete the other's
+  entries) on every modern request. Mounts differ by their options, never
+  by their catalog.
+
+`anonymousResources` cannot be combined with `beforeResourceRead`, so
+this mount has no confirmation round, and `notes://export` is therefore
+refused here outright rather than served without its gate. That refusal
+is written into `authorizePublicResource`; forgetting it is exactly how a
+second mount quietly drops a guarantee the first one makes.
+
 ### Authorization
 
-Two callbacks in [`convex/http.ts`](./convex/http.ts):
+Three callbacks in [`convex/http.ts`](./convex/http.ts):
 
-- `authorize` gates tools. Reads `metadata.public`, then requires an
-  identity, then checks the `groups` claim against `metadata.roles`.
-- `authorizeResource` gates resources, with the same role bar for
-  reading a single note.
+- `authorize` gates tools on both mounts. Reads `metadata.public`, then
+  requires an identity, then checks the `groups` claim against
+  `metadata.roles`.
+- `authorizeResource` gates resources on `/mcp/`, with the same role bar
+  for reading a single note.
+- `authorizePublicResource` gates them on `/mcp-public/`: resources
+  marked `metadata: { public: true }` anonymously, everything else
+  delegated to the callback above.
 
 Identity comes from the userinfo endpoint of any OIDC issuer you
 configure, or from the local dev token described below.
 
 `initializeInstructions` hands the model a short description of this
 policy on connect, so it does not have to infer it per tool.
+
+### Retention
+
+Four component tables grow with traffic rather than with data: sessions,
+MRTR bookkeeping, tasks and the audit log. The gateway never prunes them
+itself, so `convex/maintenance.ts` drains all four and `convex/crons.ts`
+runs it daily.
+
+The audit table is the one to think about before deploying this
+anywhere. A tool registered `taskSupport: "required"` is refused for an
+unauthenticated caller **before** `authorize` runs, and that refusal is
+recorded together with the arguments the caller sent. So anyone who can
+reach `/mcp/` can write one audit row per request, sized by their own
+request body, without ever holding a token. Retention bounds it; a
+deployment with no reason to serve anonymous callers should set
+`requireAuth` on the mount instead, and that is the stronger answer.
+
+```sh
+pnpm convex:run maintenance:runPrune
+```
 
 ### UI
 
@@ -215,6 +363,51 @@ the mutation ever executing. The Inspector's `--method tools/call` does
 not model the round trip, so this is easiest to watch from a client that
 supports elicitation, or from the tests in `convex/mcp.test.ts`, which
 drive both paths end to end and assert the store afterwards.
+
+#### Driving a task
+
+`notes_bulkTag` only ever answers with a task handle, which makes it the
+shortest way to see the SEP-2663 round trip. The extension has to be
+declared in the request's client capabilities, under `extensions`:
+
+```sh
+curl -sS -X POST http://127.0.0.1:3321/mcp/ \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'authorization: Bearer local-dev-token' \
+  -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: tools/call' \
+  -H 'mcp-name: notes_bulkTag' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"notes_bulkTag","arguments":{"tag":"reviewed"},
+        "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":{"extensions":{
+        "io.modelcontextprotocol/tasks":{}}}}}}'
+```
+
+That returns `resultType: "task"` with a `taskId` and `status:
+"working"`. Poll it (the id also goes into `Mcp-Name`):
+
+```sh
+curl -sS -X POST http://127.0.0.1:3321/mcp/ \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'authorization: Bearer local-dev-token' \
+  -H 'mcp-protocol-version: 2026-07-28' \
+  -H 'mcp-method: tasks/get' \
+  -H "mcp-name: $TASK_ID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{
+        "taskId":"'"$TASK_ID"'","_meta":{
+        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":{"extensions":{
+        "io.modelcontextprotocol/tasks":{}}}}}}'
+```
+
+Drop the `extensions` block from either request and the answer is
+`-32021` at HTTP 400, listing the capability to add. Send the same
+`tools/call` without `mcp-protocol-version: 2026-07-28` (the session
+era) and it is `-32602`: there are no tasks there, and this tool has no
+inline answer to fall back to.
 
 #### Stateless MCP 2026-07-28
 
