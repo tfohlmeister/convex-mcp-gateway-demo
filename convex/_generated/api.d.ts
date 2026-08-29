@@ -8,7 +8,9 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
+import type * as maintenance from "../maintenance.js";
 import type * as mcp from "../mcp.js";
 import type * as notes from "../notes.js";
 
@@ -19,7 +21,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
   http: typeof http;
+  maintenance: typeof maintenance;
   mcp: typeof mcp;
   notes: typeof notes;
 }>;

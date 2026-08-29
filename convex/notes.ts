@@ -8,6 +8,7 @@ const noteValidator = v.object({
   title: v.string(),
   body: v.string(),
   author: v.optional(v.string()),
+  tags: v.optional(v.array(v.string())),
 });
 
 export const list = query({
@@ -129,10 +130,11 @@ export const purge = mutation({
 /**
  * Walk every note and report a per-author tally.
  *
- * Exposed as `notes_reindex` with `taskSupport: true`, so a modern
+ * Exposed as `notes_reindex` with `taskSupport: "optional"`, so a modern
  * client may run it as an MCP task and poll `tasks/get` instead of
- * holding the request open. It is an ordinary mutation: which execution
- * path it took is invisible here, which is the point.
+ * holding the request open. Whether it does is the mount's call, made by
+ * `tasks.shouldCreate` in convex/http.ts. It is an ordinary mutation:
+ * which execution path it took is invisible here, which is the point.
  */
 export const reindex = mutation({
   args: {},
@@ -156,6 +158,38 @@ export const reindex = mutation({
   },
 });
 
+/**
+ * Apply one label to every note that does not carry it yet.
+ *
+ * Exposed as `notes_bulkTag` with `taskSupport: "required"`, so it never
+ * runs inline: the gateway always answers with a task handle and the
+ * built-in executor runs this after the HTTP request returned. A client
+ * that cannot poll is refused rather than served, which is the difference
+ * between `"required"` and the `"optional"` level `notes_reindex` uses.
+ *
+ * Deliberately idempotent per tag, because a deferred call is one a
+ * client can lose the answer to and ask about again.
+ */
+export const bulkTag = mutation({
+  args: { tag: v.string() },
+  returns: v.object({ tagged: v.number(), alreadyTagged: v.number() }),
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("notes").collect();
+    let tagged = 0;
+    let alreadyTagged = 0;
+    for (const note of all) {
+      const tags = note.tags ?? [];
+      if (tags.includes(args.tag)) {
+        alreadyTagged += 1;
+        continue;
+      }
+      await ctx.db.patch(note._id, { tags: [...tags, args.tag] });
+      tagged += 1;
+    }
+    return { tagged, alreadyTagged };
+  },
+});
+
 /** One `field contains substring` test, the leaf of a search filter. */
 const searchLeaf = v.object({
   field: v.union(v.literal("title"), v.literal("body")),
@@ -167,9 +201,9 @@ const searchLeaf = v.object({
  *
  * Exposed as `notes_search`, whose advertised `inputSchema` expresses
  * this shape with `$defs` + `$ref` + `anyOf` rather than by inlining the
- * leaf twice (see convex/mcp.ts). The gateway resolves those bounded
- * references when it inspects the schema, which is what this tool is
- * here to demonstrate.
+ * leaf twice (see convex/mcp.ts). The client receives that document as
+ * authored; the gateway resolves the references only for its own view,
+ * which is what this tool is here to demonstrate.
  */
 export const search = query({
   args: { filter: v.union(searchLeaf, v.object({ all: v.array(searchLeaf) })) },

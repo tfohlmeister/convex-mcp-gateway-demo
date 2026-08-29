@@ -12,6 +12,12 @@ export default defineSchema({
      * MCP identity, and so rows predating the field stay valid.
      */
     author: v.optional(v.string()),
+    /**
+     * Labels applied by `notes_bulkTag`, the demo's task-only tool.
+     * Optional so notes written by the React UI, and rows predating the
+     * field, stay valid.
+     */
+    tags: v.optional(v.array(v.string())),
   })
     .index("by_title", ["title"])
     // Backs `notes.byAuthor`, the tool that demonstrates `x-mcp-header`.

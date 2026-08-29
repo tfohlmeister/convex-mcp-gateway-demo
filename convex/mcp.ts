@@ -30,6 +30,9 @@ export const instructions = [
   "individual note through `note://{id}` is admin-only as well.",
   "Prefer the `notes://all` resource over `notes_list` when you just",
   "need the current contents; it is cheaper and read-only.",
+  "On MCP 2026-07-28, `notes_bulkTag` never answers inline: it hands",
+  "back a task handle, so poll `tasks/get` for its tally. On an older",
+  "revision it cannot run at all.",
 ].join("\n");
 
 /**
@@ -228,17 +231,14 @@ export const tools: McpToolRegistration[] = [
     mrtrArgs: { idempotencyKey: "confirmationKey" },
     beforeCall: async (ctx, { inputResponses, round }) => {
       // The hook runs in the HOST, not in the component, so it can read
-      // the database and tell the user what they are about to lose. The
-      // gateway types this ctx as `{ auth } & Record<string, unknown>`,
-      // so `runQuery` needs narrowing before use.
-      const { runQuery } = ctx as unknown as {
-        runQuery: (
-          ref: typeof api.notes.count,
-          args: Record<string, never>,
-        ) => Promise<{ total: number }>;
-      };
+      // the database and tell the user what they are about to lose.
+      // `ctx.runQuery` is named on the callback context, so only the
+      // result needs a type; it is deliberately loose in the gateway,
+      // because `api.*` references are generated per project.
       const ask = async () => {
-        const { total } = await runQuery(api.notes.count, {});
+        const { total } = (await ctx.runQuery(api.notes.count, {})) as {
+          total: number;
+        };
         return inputRequired(
           {
             confirm: {
@@ -263,6 +263,46 @@ export const tools: McpToolRegistration[] = [
           // back on the continuation. Carried here to show the channel;
           // it is not trusted input on the way back, it is verified.
           { askedAt: Date.now(), noteCount: total },
+          {
+            // The fallback for a client whose capabilities cannot carry
+            // this round. Without it the gateway fails the call closed
+            // with a protocol error, which is safe but tells the model
+            // nothing it can act on.
+            //
+            // Read the trigger carefully before copying this. It is not
+            // only "the client did not declare elicitation": the gateway
+            // has per-request capabilities on 2026-07-28 ONLY, and
+            // treats a session-era call as one it cannot vouch for. So
+            // this fallback also replaces the `-32601` that a
+            // 2025-era client used to get, INCLUDING one that declared
+            // elicitation at `initialize`. The message therefore names
+            // both ways to get here, and it is an ERROR result rather
+            // than a friendly note: on the session protocol this tool
+            // can never run, and reporting that as a successful call
+            // would make it a permanent silent no-op.
+            //
+            // What a fallback never does is wave the gate through: it
+            // COMPLETES the call before dispatch, so the mutation is as
+            // un-run as after a decline.
+            //
+            // No `structuredContent`, though this tool declares an
+            // `outputSchema`: there was no purge, so there is no
+            // `{ deleted, replayed }` to report, and inventing one would
+            // tell the model a delete happened. Same shape the decline
+            // branch below returns.
+            onUnsupported: completeCall({
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Nothing was deleted: this purge needs a confirmation " +
+                    "round, which requires MCP 2026-07-28 and a client " +
+                    "that declares the `elicitation` capability.",
+                },
+              ],
+              isError: true,
+            }),
+          },
         );
       };
       // Discriminate on `round`, not on `inputResponses`: a state-only
@@ -289,19 +329,29 @@ export const tools: McpToolRegistration[] = [
     metadata: { roles: ["admin"] },
   }),
   /**
-   * MCP Tasks. `taskSupport: true` lets a modern client send
-   * `tools/call` with a `task` request and poll `tasks/get` for the
-   * result instead of holding the request open.
+   * MCP Tasks, at the `"optional"` level.
    *
-   * The mount in convex/http.ts passes `tasks: {}`, i.e. no `execute`,
-   * so the component's built-in scheduled executor runs this tool once
-   * after the HTTP request returns. That is durable across restarts and
-   * deliberately does not retry: a mutation that already committed must
-   * not run twice.
+   * SEP-2663 gives the client no per-call say: it declares the
+   * `io.modelcontextprotocol/tasks` extension once in its capabilities
+   * and then handles whichever result arrives. So the SERVER decides,
+   * and this level is what hands that decision to the host: the mount in
+   * convex/http.ts passes a `tasks.shouldCreate` that answers "inline"
+   * for a small store and "task" for one large enough to be worth
+   * polling. Omitting the callback would make every eligible call a
+   * task.
    *
-   * Tasks exist only on `2026-07-28`. A session-based client calling
-   * this tool gets the ordinary synchronous result, with no task and no
-   * error, so the same catalog serves both eras.
+   * The mount passes no `execute`, so the component's built-in scheduled
+   * executor runs this tool once after the HTTP request returns. That is
+   * durable across restarts and deliberately does not retry: a mutation
+   * that already committed must not run twice.
+   *
+   * Tasks exist only on `2026-07-28`, and only for an authenticated
+   * caller, because a task is owner-bound. A caller who clears this
+   * tool's own `admin` bar but cannot have a task (a session-era client,
+   * or one that never declared the extension) gets the ordinary
+   * synchronous result instead, with no task and no error, which is what
+   * lets one catalog serve both eras. An anonymous caller never gets
+   * that far: `authorize` answers `-32001` first.
    */
   defineMcpMutation({
     name: "notes_reindex",
@@ -316,26 +366,60 @@ export const tools: McpToolRegistration[] = [
         v.object({ author: v.string(), notes: v.float64() }),
       ),
     }),
-    taskSupport: true,
+    taskSupport: "optional",
     title: "Reindex notes",
     annotations: { readOnlyHint: false, idempotentHint: true },
     metadata: { roles: ["admin"] },
   }),
   /**
-   * Bounded JSON Schema 2020-12 `$ref` and composition.
+   * The other task level: `"required"`, for work that has no synchronous
+   * answer to give.
+   *
+   * `"optional"` above still runs inline whenever a task is impossible
+   * (a legacy client, an anonymous caller) or unwanted (`shouldCreate`
+   * said no). `"required"` says that inline is never a valid outcome for
+   * this tool, and the gateway then refuses instead of dispatching:
+   *
+   * - a modern client that did not declare the tasks extension is
+   *   answered `-32021 MissingRequiredClientCapability`, whose
+   *   `data.requiredCapabilities` names exactly what to add,
+   * - an anonymous caller is challenged, because a task is owner-bound,
+   * - a session-era client is answered `-32602` naming the protocol
+   *   revision it would need.
+   *
+   * Refusing is the point. Dispatching such a call anyway would run the
+   * side effect the level exists to defer, and then hand the client a
+   * result it did not ask for and may not be able to read.
+   */
+  defineMcpMutation({
+    name: "notes_bulkTag",
+    description:
+      "Label every note. Runs only as an MCP task; poll tasks/get for " +
+      "the tally.",
+    fn: api.notes.bulkTag,
+    args: { tag: v.string() },
+    returns: v.object({ tagged: v.float64(), alreadyTagged: v.float64() }),
+    taskSupport: "required",
+    title: "Bulk-tag notes",
+    annotations: { readOnlyHint: false, idempotentHint: true },
+    metadata: { roles: ["admin"] },
+  }),
+  /**
+   * JSON Schema 2020-12 `$defs` + `$ref` + `anyOf`, kept as authored.
    *
    * The filter is either one condition or a conjunction of them, and the
-   * schema says so with `$defs` + `$ref` + `anyOf` instead of inlining
-   * the leaf twice.
+   * schema says so by naming the leaf once instead of inlining it twice.
    *
-   * The gateway RESOLVES those references at registration and advertises
-   * the expanded, self-contained form: what a client receives here has
-   * no `$ref` and no `$defs` left in it. That is the point. The host
-   * gets to factor a shared shape out once, and a client that cannot
-   * follow a reference still sees a complete schema. Resolution is
-   * bounded in depth and total work, so a cyclic or hostile schema
-   * cannot hang the request; it is rejected at sync time with the tool
-   * named.
+   * What a client receives is exactly this document, `$schema`, `$defs`
+   * and both `$ref`s included, as SEP-1613 asks. The gateway keeps a
+   * second, resolved view for its own purposes (validating the
+   * `x-mcp-header` annotations, bounding the work a hostile schema can
+   * cause), and that resolution is where a cyclic or oversized schema is
+   * rejected at sync time with the tool named. The client never sees
+   * that view. Up to gateway 0.11.0 it did, and a tool that declared its
+   * dialect at all took the whole mount down, because a Convex document
+   * cannot carry a field name starting with `$`; the registry now stores
+   * the authored form JSON-encoded beside the resolved one.
    *
    * Written out by hand for the same reason as `notes_by_author`:
    * `defineMcpQuery` derives `inputSchema` from the Convex validators,
@@ -351,6 +435,10 @@ export const tools: McpToolRegistration[] = [
     fn: api.notes.search,
     functionReference: api.notes.search,
     inputSchema: {
+      // Declaring the dialect is the SEP-1613 point of the pass-through:
+      // a `$`-prefixed keyword now survives the registry instead of
+      // failing the write from inside Convex.
+      $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       $defs: {
         condition: {
@@ -408,8 +496,15 @@ export const tools: McpToolRegistration[] = [
 /**
  * Concrete MCP resources, passed to `handleMcpRequest({ resources })`.
  * Unlike a tool, a resource is read-only content the client can pull
- * without deciding to "act". Reads always require an authenticated
- * caller; the gateway rejects anonymous ones before `read` runs.
+ * without deciding to "act".
+ *
+ * A read normally requires an authenticated caller, and the gateway
+ * rejects anonymous ones before `read` runs. The exception is a mount
+ * that sets `anonymousResources` (convex/http.ts mounts one at
+ * `/mcp-public/`), which is why every `read` handler here takes
+ * `identity` as NULLABLE. Narrow it before use: a handler that reads
+ * `identity.subject` unconditionally compiles on a mount that never
+ * serves anonymous callers and breaks on the one that does.
  */
 export const resources: McpResourceRegistration[] = [
   defineMcpResource({
@@ -464,6 +559,36 @@ export const resources: McpResourceRegistration[] = [
           uri,
           mimeType: "text/plain",
           text: notes.map((n) => `# ${n.title}\n${n.body}`).join("\n\n"),
+        },
+      ];
+    },
+  }),
+  defineMcpResource({
+    uri: "notes://stats",
+    name: "notes-stats",
+    title: "Store statistics",
+    description: "How many notes exist. Readable without a token.",
+    mimeType: "application/json",
+    annotations: { audience: ["assistant"], priority: 0.2 },
+    // Host-side metadata, never advertised to a client. The
+    // `/mcp-public/` mount's authorizer reads it as the opt-in for
+    // anonymous reads, which is why this handler has to deal with a null
+    // caller. It carries no note contents on purpose: a count is what an
+    // unauthenticated client may know.
+    metadata: { public: true },
+    read: async (ctx, { uri, identity }) => {
+      const { total } = (await ctx.runQuery(api.notes.count, {})) as {
+        total: number;
+      };
+      return [
+        {
+          uri,
+          mimeType: "application/json",
+          // `identity` is null on the anonymous mount and a caller
+          // everywhere else. Stamping it either way keeps the two mounts
+          // distinguishable from the client side, and is the narrowing
+          // the nullable type asks for.
+          text: JSON.stringify({ total, caller: identity?.subject ?? null }),
         },
       ];
     },
