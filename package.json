@@ -29,10 +29,10 @@
     "@edge-runtime/vm": "5.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
-    "@vitejs/plugin-react": "^6.1.0",
-    "convex-test": "^0.0.56",
+    "@vitejs/plugin-react": "^6.1.1",
+    "convex-test": "^0.0.58",
     "typescript": "~7.0.2",
-    "vite": "^8.2.2",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
   }
 }
