@@ -20,7 +20,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "convex": "^1.45.0",
+    "convex": "^1.46.0",
     "convex-mcp-gateway": "^2.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
