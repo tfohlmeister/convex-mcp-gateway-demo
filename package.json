@@ -32,7 +32,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "convex-test": "^0.0.56",
     "typescript": "~7.0.2",
-    "vite": "^8.2.2",
+    "vite": "^8.2.4",
     "vitest": "^4.1.11"
   }
 }
