@@ -317,7 +317,7 @@ and reconcile themselves on the first MCP `initialize`.
 Drive the MCP endpoint directly with the official Inspector:
 
 ```sh
-npx -y @modelcontextprotocol/inspector --cli \
+pnpm dlx @modelcontextprotocol/inspector --cli \
   http://127.0.0.1:3321/mcp/ --transport http --method tools/list
 ```
 
@@ -338,7 +338,7 @@ deployment, which switches on two hard-coded identities:
 | `local-dev-token-readonly` | `dev-reader` | none    | read-only tools and `notes://all`; writes and `note://{id}` are refused |
 
 ```sh
-npx -y @modelcontextprotocol/inspector --cli \
+pnpm dlx @modelcontextprotocol/inspector --cli \
   http://127.0.0.1:3321/mcp/ --transport http --method tools/list \
   --header "Authorization: Bearer local-dev-token"
 ```
@@ -506,7 +506,7 @@ check. A request whose `Origin` is present but not on the list gets
 on both protocol eras:
 
 ```sh
-npx convex env set MCP_ALLOWED_ORIGINS https://claude.ai,https://claude.com
+pnpm exec convex env set MCP_ALLOWED_ORIGINS https://claude.ai,https://claude.com
 ```
 
 Both hosts, because claude.ai serves the connector from either and the
@@ -533,7 +533,7 @@ another browser MCP client, deploy to a real Convex project:
 ```sh
 cp .env.example .env.local
 # fill in OIDC_ISSUER + OIDC_CLIENT_ID, optionally MCP_AUTH_SERVER_URL
-npx convex dev            # auto-populates CONVEX_* in .env.local
+pnpm exec convex dev                 # auto-populates CONVEX_* in .env.local
 pnpm convex:run mcp:configureOAuth   # only when using the OAuth bridge
 pnpm dev
 ```
