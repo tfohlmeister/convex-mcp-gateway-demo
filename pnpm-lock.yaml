@@ -167,11 +167,11 @@ importers:
   .:
     dependencies:
       convex:
-        specifier: ^1.50.0
-        version: 1.50.0(react@19.3.1)
+        specifier: ^1.51.0
+        version: 1.51.0(react@19.3.1)
       convex-mcp-gateway:
         specifier: ^2.1.0
-        version: 2.1.1(convex@1.50.0(react@19.3.1))
+        version: 2.1.1(convex@1.51.0(react@19.3.1))
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -193,7 +193,7 @@ importers:
         version: 6.3.0(vite@8.3.8(esbuild@0.27.0))
       convex-test:
         specifier: ^0.0.71
-        version: 0.0.71(convex@1.50.0(react@19.3.1))
+        version: 0.0.71(convex@1.51.0(react@19.3.1))
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
@@ -691,8 +691,8 @@ packages:
     peerDependencies:
       convex: ^1.43.0
 
-  convex@1.50.0:
-    resolution: {integrity: sha512-WzzCad5hyzU4zzW0ChyUGB3Mil4LgRYMYii9cyQtC24WQnfaRgkZB0IKyhIIgRm1a2IXiGJoZnVYYSfttiap3Q==}
+  convex@1.51.0:
+    resolution: {integrity: sha512-Y5gS+JmT2JBq76S3CrQDrdL/Ijs4ZRKsvz3cu5EmHf/QxW18QrHunb5j9WC6lAbWbWc/gvmqpa5lvXzLXFQVJA==}
     engines: {node: '>=22.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -1269,15 +1269,15 @@ snapshots:
 
   chai@6.3.0: {}
 
-  convex-mcp-gateway@2.1.1(convex@1.50.0(react@19.3.1)):
+  convex-mcp-gateway@2.1.1(convex@1.51.0(react@19.3.1)):
     dependencies:
-      convex: 1.50.0(react@19.3.1)
+      convex: 1.51.0(react@19.3.1)
 
-  convex-test@0.0.71(convex@1.50.0(react@19.3.1)):
+  convex-test@0.0.71(convex@1.51.0(react@19.3.1)):
     dependencies:
-      convex: 1.50.0(react@19.3.1)
+      convex: 1.51.0(react@19.3.1)
 
-  convex@1.50.0(react@19.3.1):
+  convex@1.51.0(react@19.3.1):
     dependencies:
       esbuild: 0.27.0
       prettier: 3.8.3
